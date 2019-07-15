@@ -125,6 +125,7 @@ add_library(box STATIC
     bind.c
     execute.c
     wal.c
+    wal_mem.c
     call.c
     merger.c
     ${lua_sources}
