@@ -42,7 +42,9 @@
 static inline const char *
 update_op_field_str(const struct update_op *op)
 {
-	if (op->field_no >= 0)
+	if (op->lexer.src != NULL)
+		return tt_sprintf("'%.*s'", op->lexer.src_len, op->lexer.src);
+	else if (op->field_no >= 0)
 		return tt_sprintf("%d", op->field_no + TUPLE_INDEX_BASE);
 	else
 		return tt_sprintf("%d", op->field_no);
@@ -83,8 +85,12 @@ update_err_splice_bound(const struct update_op *op)
 int
 update_err_no_such_field(const struct update_op *op)
 {
-	diag_set(ClientError, ER_NO_SUCH_FIELD_NO, op->field_no >= 0 ?
-		 TUPLE_INDEX_BASE + op->field_no : op->field_no);
+	if (op->lexer.src == NULL) {
+		diag_set(ClientError, ER_NO_SUCH_FIELD_NO, op->field_no +
+			 (op->field_no >= 0 ? TUPLE_INDEX_BASE : 0));
+		return -1;
+	}
+	diag_set(ClientError, ER_NO_SUCH_FIELD_NAME, update_op_field_str(op));
 	return -1;
 }
 
@@ -108,6 +114,8 @@ update_field_sizeof(struct update_field *field)
 		return field->scalar.op->new_field_len;
 	case UPDATE_ARRAY:
 		return update_array_sizeof(field);
+	case UPDATE_BAR:
+		return update_bar_sizeof(field);
 	default:
 		unreachable();
 	}
@@ -132,6 +140,8 @@ update_field_store(struct update_field *field, char *out, char *out_end)
 		return size;
 	case UPDATE_ARRAY:
 		return update_array_store(field, out, out_end);
+	case UPDATE_BAR:
+		return update_bar_store(field, out, out_end);
 	default:
 		unreachable();
 	}
@@ -616,6 +626,7 @@ update_op_decode(struct update_op *op, int index_base,
 	switch(mp_typeof(**expr)) {
 	case MP_INT:
 	case MP_UINT: {
+		json_lexer_create(&op->lexer, NULL, 0, 0);
 		if (mp_read_i32(op, expr, &field_no) != 0)
 			return -1;
 		if (field_no - index_base >= 0) {
@@ -631,14 +642,35 @@ update_op_decode(struct update_op *op, int index_base,
 	case MP_STR: {
 		const char *path = mp_decode_str(expr, &len);
 		uint32_t field_no, hash = field_name_hash(path, len);
+		json_lexer_create(&op->lexer, path, len, TUPLE_INDEX_BASE);
 		if (tuple_fieldno_by_name(dict, path, len, hash,
 					  &field_no) == 0) {
 			op->field_no = (int32_t) field_no;
+			op->lexer.offset = len;
 			break;
 		}
-		diag_set(ClientError, ER_NO_SUCH_FIELD_NAME,
-			 tt_cstr(path, len));
-		return -1;
+		struct json_token token;
+		int rc = json_lexer_next_token(&op->lexer, &token);
+		if (rc != 0)
+			return update_err_bad_json(op, rc);
+		switch (token.type) {
+		case JSON_TOKEN_NUM:
+			op->field_no = token.num;
+			break;
+		case JSON_TOKEN_STR:
+			hash = field_name_hash(token.str, token.len);
+			if (tuple_fieldno_by_name(dict, token.str, token.len,
+						  hash, &field_no) == 0) {
+				op->field_no = (int32_t) field_no;
+				break;
+			}
+			FALLTHROUGH;
+		default:
+			diag_set(ClientError, ER_NO_SUCH_FIELD_NAME,
+				 tt_cstr(path, len));
+			return -1;
+		}
+		break;
 	}
 	default:
 		diag_set(ClientError, ER_ILLEGAL_PARAMS,

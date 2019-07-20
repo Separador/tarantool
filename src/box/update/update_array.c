@@ -216,12 +216,19 @@ do_op_array_insert(struct update_op *op, struct update_field *field)
 {
 	assert(field->type == UPDATE_ARRAY);
 	struct rope *rope = field->array.rope;
+	struct update_array_item *item;
+	if (! update_op_is_term(op)) {
+		item = update_array_extract_item(field, op);
+		if (item == NULL)
+			return -1;
+		return do_op_insert(op, &item->field);
+	}
+
 	if (update_op_adjust_field_no(op, rope_size(rope) + 1) != 0)
 		return -1;
 
-	struct update_array_item *item =
-		(struct update_array_item *) rope_alloc(rope->ctx,
-							sizeof(*item));
+	item = (struct update_array_item *) rope_alloc(rope->ctx,
+						       sizeof(*item));
 	if (item == NULL)
 		return -1;
 	update_array_item_create(item, UPDATE_NOP, op->arg.set.value,
@@ -242,6 +249,8 @@ do_op_array_set(struct update_op *op, struct update_field *field)
 		update_array_extract_item(field, op);
 	if (item == NULL)
 		return -1;
+	if (! update_op_is_term(op))
+		return do_op_set(op, &item->field);
 	op->new_field_len = op->arg.set.length;
 	/* Ignore the previous op, if any. */
 	item->field.type = UPDATE_SCALAR;
@@ -253,6 +262,13 @@ int
 do_op_array_delete(struct update_op *op, struct update_field *field)
 {
 	assert(field->type == UPDATE_ARRAY);
+	if (! update_op_is_term(op)) {
+		struct update_array_item *item =
+			update_array_extract_item(field, op);
+		if (item == NULL)
+			return -1;
+		return do_op_delete(op, &item->field);
+	}
 	struct rope *rope = field->array.rope;
 	uint32_t size = rope_size(rope);
 	if (update_op_adjust_field_no(op, size) != 0)
@@ -273,6 +289,8 @@ do_op_array_##op_type(struct update_op *op, struct update_field *field)		\
 		update_array_extract_item(field, op);				\
 	if (item == NULL)							\
 		return -1;							\
+	if (! update_op_is_term(op))						\
+		return do_op_##op_type(op, &item->field);			\
 	if (item->field.type != UPDATE_NOP)					\
 		return update_err_double(op);					\
 	if (update_op_do_##op_type(op, item->field.data) != 0)			\

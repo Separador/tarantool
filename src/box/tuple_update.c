@@ -331,8 +331,8 @@ tuple_upsert_squash(const char *expr1, const char *expr1_end,
 		int32_t prev_field_no = index_base - 1;
 		for (uint32_t i = 0; i < update[j].op_count; i++) {
 			struct update_op *op = &update[j].ops[i];
-			if (op->opcode != '+' && op->opcode != '-' &&
-			    op->opcode != '=')
+			if ((op->opcode != '+' && op->opcode != '-' &&
+			     op->opcode != '=') || op->lexer.src != NULL)
 				return NULL;
 			if (op->field_no <= prev_field_no)
 				return NULL;
