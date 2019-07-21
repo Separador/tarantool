@@ -193,11 +193,12 @@ update_read_ops(struct tuple_update *update, const char *expr,
  * @retval -1 Error.
  */
 static int
-update_do_ops(struct tuple_update *update, const char *old_data,
-	      const char *old_data_end, uint32_t part_count)
+update_do_ops(struct tuple_update *update, const char *header,
+	      const char *old_data, const char *old_data_end,
+	      uint32_t part_count)
 {
-	if (update_array_create(&update->root_array, old_data, old_data_end,
-				part_count) != 0)
+	if (update_array_create(&update->root_array, header, old_data,
+				old_data_end, part_count) != 0)
 		return -1;
 	struct update_op *op = update->ops;
 	struct update_op *ops_end = op + update->op_count;
@@ -214,12 +215,12 @@ update_do_ops(struct tuple_update *update, const char *old_data,
  *        and it is enough to simply write the error to the log.
  */
 static int
-upsert_do_ops(struct tuple_update *update, const char *old_data,
-	      const char *old_data_end, uint32_t part_count,
-	      bool suppress_error)
+upsert_do_ops(struct tuple_update *update, const char *header,
+	      const char *old_data, const char *old_data_end,
+	      uint32_t part_count, bool suppress_error)
 {
-	if (update_array_create(&update->root_array, old_data, old_data_end,
-				part_count) != 0)
+	if (update_array_create(&update->root_array, header, old_data,
+				old_data_end, part_count) != 0)
 		return -1;
 	struct update_op *op = update->ops;
 	struct update_op *ops_end = op + update->op_count;
@@ -276,11 +277,13 @@ tuple_update_execute(const char *expr,const char *expr_end,
 {
 	struct tuple_update update;
 	update_init(&update, index_base);
+	const char *header = old_data;
 	uint32_t field_count = mp_decode_array(&old_data);
 
 	if (update_read_ops(&update, expr, expr_end, dict, field_count) != 0)
 		return NULL;
-	if (update_do_ops(&update, old_data, old_data_end, field_count))
+	if (update_do_ops(&update, header, old_data, old_data_end,
+			  field_count) != 0)
 		return NULL;
 	if (column_mask)
 		*column_mask = update.column_mask;
@@ -296,12 +299,13 @@ tuple_upsert_execute(const char *expr,const char *expr_end,
 {
 	struct tuple_update update;
 	update_init(&update, index_base);
+	const char *header = old_data;
 	uint32_t field_count = mp_decode_array(&old_data);
 
 	if (update_read_ops(&update, expr, expr_end, dict, field_count) != 0)
 		return NULL;
-	if (upsert_do_ops(&update, old_data, old_data_end, field_count,
-			  suppress_error))
+	if (upsert_do_ops(&update, header, old_data, old_data_end, field_count,
+			  suppress_error) != 0)
 		return NULL;
 	if (column_mask)
 		*column_mask = update.column_mask;

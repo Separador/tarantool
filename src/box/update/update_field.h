@@ -306,6 +306,7 @@ update_##type##_store(struct update_field *field, char *out, char *out_end);
 /**
  * Initialize @a field as an array to update.
  * @param[out] field Field to initialize.
+ * @param header Header of the MessagePack array @a data.
  * @param data MessagePack data of the array to update.
  * @param data_end End of @a data.
  * @param field_count Field count in @data.
@@ -314,8 +315,9 @@ update_##type##_store(struct update_field *field, char *out, char *out_end);
  * @retval -1 Error.
  */
 int
-update_array_create(struct update_field *field, const char *data,
-		    const char *data_end, uint32_t field_count);
+update_array_create(struct update_field *field, const char *header,
+		    const char *data, const char *data_end,
+		    uint32_t field_count);
 
 OP_DECL_GENERIC(array)
 
