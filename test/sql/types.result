@@ -1794,3 +1794,61 @@ s:select()
 s:drop()
 ---
 ...
+--
+-- Make sure that the array/map conversion to scalar error is
+-- displayed correctly.
+--
+box.execute('CREATE TABLE t1(i INT PRIMARY KEY AUTOINCREMENT, a SCALAR);')
+---
+- row_count: 1
+...
+format = {}
+---
+...
+format[1] = {type = 'integer', name = 'I'}
+---
+...
+format[2] = {type = 'array', name = 'A'}
+---
+...
+s = box.schema.space.create('T2', {format=format})
+---
+...
+i = s:create_index('ii')
+---
+...
+s:insert({1, {1,2,3}})
+---
+- [1, [1, 2, 3]]
+...
+box.execute('INSERT INTO t1(a) SELECT a FROM t2;')
+---
+- error: 'Type mismatch: can not convert [1, 2, 3] to scalar'
+...
+s:drop()
+---
+...
+format[2].type = 'map'
+---
+...
+s = box.schema.space.create('T2', {format=format})
+---
+...
+i = s:create_index('ii')
+---
+...
+s:insert({1, {b = 1}})
+---
+- [1, {'b': 1}]
+...
+box.execute('INSERT INTO t1(a) SELECT a FROM t2;')
+---
+- error: 'Type mismatch: can not convert {"b": 1} to scalar'
+...
+s:drop()
+---
+...
+box.execute('DROP TABLE t1;')
+---
+- row_count: 1
+...

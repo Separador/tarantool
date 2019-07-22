@@ -1135,6 +1135,19 @@ valueToText(sql_value * pVal)
 {
 	assert(pVal != 0);
 	assert((pVal->flags & (MEM_Null)) == 0);
+	if ((pVal->flags & MEM_Subtype) != 0 &&
+	    pVal->subtype == SQL_SUBTYPE_MSGPACK) {
+		const char *value = mp_str(pVal->z);
+		size_t len = strlen(value) + 1;
+		char *result = region_alloc(&fiber()->gc, len);
+		if (result == NULL) {
+			diag_set(OutOfMemory, len, "region_alloc", "result");
+			sqlOomFault(sql_get());
+			return NULL;
+		}
+		memcpy(result, value, len);
+		return result;
+	}
 	if (pVal->flags & (MEM_Blob | MEM_Str)) {
 		if (ExpandBlob(pVal))
 			return 0;
