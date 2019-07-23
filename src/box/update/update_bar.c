@@ -250,12 +250,11 @@ do_op_nop_delete(struct update_op *op, struct update_field *field)
 int										\
 do_op_bar_##op_type(struct update_op *op, struct update_field *field)		\
 {										\
-	(void) op;								\
-	(void) field;								\
 	assert(field->type == UPDATE_BAR);					\
-	diag_set(ClientError, ER_UNSUPPORTED, "update",				\
-		 "intersected JSON paths");					\
-	return -1;								\
+	field = update_route_branch(field, op);					\
+	if (field == NULL)							\
+		return -1;							\
+	return do_op_##op_type(op, field);					\
 }
 
 DO_SCALAR_OP_GENERIC(insert)
