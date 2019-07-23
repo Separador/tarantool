@@ -595,6 +595,22 @@ update_op_by(char opcode)
 }
 
 int
+update_op_consume_token(struct update_op *op)
+{
+	struct json_token token;
+	int rc = json_lexer_next_token(&op->lexer, &token);
+	if (rc != 0)
+		return update_err_bad_json(op, rc);
+	if (token.type == JSON_TOKEN_END)
+		return update_err_no_such_field(op);
+	op->token_type = token.type;
+	op->key = token.str;
+	op->key_len = token.len;
+	op->field_no = token.num;
+	return 0;
+}
+
+int
 update_op_decode(struct update_op *op, int index_base,
 		 struct tuple_dictionary *dict, const char **expr)
 {
@@ -622,6 +638,7 @@ update_op_decode(struct update_op *op, int index_base,
 		diag_set(ClientError, ER_UNKNOWN_UPDATE_OP);
 		return -1;
 	}
+	op->token_type = JSON_TOKEN_NUM;
 	int32_t field_no;
 	switch(mp_typeof(**expr)) {
 	case MP_INT:

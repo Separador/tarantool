@@ -175,8 +175,18 @@ struct update_op {
 	const struct update_op_meta *meta;
 	/** Operation arguments. */
 	union update_op_arg arg;
-	/** First level field no. */
-	int32_t field_no;
+	/**
+	 * Current level token. END means that it is invalid and
+	 * a next token should be extracted from the lexer.
+	 */
+	enum json_token_type token_type;
+	union {
+		struct {
+			const char *key;
+			uint32_t key_len;
+		};
+		int32_t field_no;
+	};
 	/** Size of a new field after it is updated. */
 	uint32_t new_field_len;
 	/** Opcode symbol: = + - / ... */
@@ -188,6 +198,17 @@ struct update_op {
 	 */
 	struct json_lexer lexer;
 };
+
+/**
+ * Extract a next token from the operation path lexer. The result
+ * is used to decide to which child of a current map/array the
+ * operation should be forwarded. It is not just a synonym to
+ * json_lexer_next_token, because fills some fields of @a op,
+ * and should be used only to chose a next child inside a current
+ * map/array.
+ */
+int
+update_op_consume_token(struct update_op *op);
 
 /**
  * Decode an update operation from MessagePack.

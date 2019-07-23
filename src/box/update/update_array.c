@@ -33,6 +33,26 @@
 #include "fiber.h"
 
 /**
+ * Make sure @a op contains a valid field number. It can be not
+ * so, if the array's parent didn't propagate operation's lexer.
+ * In fact, the parent fills fieldno only in some rare cases like
+ * branching. Generally, an array should care about fieldno by
+ * itself.
+ */
+static inline int
+update_op_prepare_num_token(struct update_op *op)
+{
+	if (op->token_type == JSON_TOKEN_END &&
+	    update_op_consume_token(op) != 0)
+			return -1;
+	if (op->token_type != JSON_TOKEN_NUM) {
+		return update_err(op, "can't update an array by not a "\
+				  "number index");
+	}
+	return 0;
+}
+
+/**
  * Make field number positive and check for the field existence.
  * @param op Update operation.
  * @param field_count Field count in the array having this field.
@@ -43,6 +63,7 @@
 static inline int
 update_op_adjust_field_no(struct update_op *op, int32_t field_count)
 {
+	assert(op->token_type == JSON_TOKEN_NUM);
 	if (op->field_no >= 0) {
 		if (op->field_no < field_count)
 			return 0;
@@ -217,10 +238,14 @@ do_op_array_insert(struct update_op *op, struct update_field *field)
 	assert(field->type == UPDATE_ARRAY);
 	struct rope *rope = field->array.rope;
 	struct update_array_item *item;
+	if (update_op_prepare_num_token(op) != 0)
+		return -1;
+
 	if (! update_op_is_term(op)) {
 		item = update_array_extract_item(field, op);
 		if (item == NULL)
 			return -1;
+		op->token_type = JSON_TOKEN_END;
 		return do_op_insert(op, &item->field);
 	}
 
@@ -241,6 +266,9 @@ do_op_array_set(struct update_op *op, struct update_field *field)
 {
 	assert(field->type == UPDATE_ARRAY);
 	struct rope *rope = field->array.rope;
+	if (update_op_prepare_num_token(op) != 0)
+		return -1;
+
 	/* Interpret '=' for n + 1 field as insert. */
 	if (op->field_no == (int32_t) rope_size(rope))
 		return do_op_array_insert(op, field);
@@ -249,8 +277,10 @@ do_op_array_set(struct update_op *op, struct update_field *field)
 		update_array_extract_item(field, op);
 	if (item == NULL)
 		return -1;
-	if (! update_op_is_term(op))
+	if (! update_op_is_term(op)) {
+		op->token_type = JSON_TOKEN_END;
 		return do_op_set(op, &item->field);
+	}
 	op->new_field_len = op->arg.set.length;
 	/* Ignore the previous op, if any. */
 	item->field.type = UPDATE_SCALAR;
@@ -262,11 +292,15 @@ int
 do_op_array_delete(struct update_op *op, struct update_field *field)
 {
 	assert(field->type == UPDATE_ARRAY);
+	if (update_op_prepare_num_token(op) != 0)
+		return -1;
+
 	if (! update_op_is_term(op)) {
 		struct update_array_item *item =
 			update_array_extract_item(field, op);
 		if (item == NULL)
 			return -1;
+		op->token_type = JSON_TOKEN_END;
 		return do_op_delete(op, &item->field);
 	}
 	struct rope *rope = field->array.rope;
@@ -285,12 +319,16 @@ do_op_array_delete(struct update_op *op, struct update_field *field)
 int										\
 do_op_array_##op_type(struct update_op *op, struct update_field *field)		\
 {										\
+	if (update_op_prepare_num_token(op) != 0)				\
+		return -1;							\
 	struct update_array_item *item =					\
 		update_array_extract_item(field, op);				\
 	if (item == NULL)							\
 		return -1;							\
-	if (! update_op_is_term(op))						\
+	if (! update_op_is_term(op)) {						\
+		op->token_type = JSON_TOKEN_END;				\
 		return do_op_##op_type(op, &item->field);			\
+	}									\
 	if (item->field.type != UPDATE_NOP)					\
 		return update_err_double(op);					\
 	if (update_op_do_##op_type(op, item->field.data) != 0)			\
