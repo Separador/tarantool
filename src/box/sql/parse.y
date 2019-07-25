@@ -266,9 +266,18 @@ ccons ::= NULL onconf(R).        {
     if (R != ON_CONFLICT_ACTION_ABORT)
         sql_column_add_nullable_action(pParse, R);
 }
+ccons ::= AUTOINCR. {
+  if (pParse->create_table_def.autoinc_field != UINT32_MAX) {
+    diag_set(ClientError, ER_SQL_SYNTAX, "CREATE TABLE", "statement cannot "
+             "have more than one AUTOINCREMENT");
+    pParse->is_aborted = true;
+  } else {
+    pParse->create_table_def.autoinc_field =
+      pParse->create_table_def.new_space->def->field_count - 1;
+  }
+}
 ccons ::= NOT NULL onconf(R).    {sql_column_add_nullable_action(pParse, R);}
-ccons ::= cconsname(N) PRIMARY KEY sortorder(Z) autoinc(I). {
-  pParse->create_table_def.has_autoinc = I;
+ccons ::= cconsname(N) PRIMARY KEY sortorder(Z). {
   create_index_def_init(&pParse->create_index_def, NULL, &N, NULL,
                         SQL_INDEX_TYPE_CONSTRAINT_PK, Z, false);
   sqlAddPrimaryKey(pParse);
@@ -294,11 +303,6 @@ ccons ::= cconsname(N) REFERENCES nm(T) eidlist_opt(TA) matcharg(M) refargs(R). 
 }
 ccons ::= defer_subclause(D).    {fk_constraint_change_defer_mode(pParse, D);}
 ccons ::= COLLATE id(C).        {sqlAddCollateType(pParse, &C);}
-
-// The optional AUTOINCREMENT keyword
-%type autoinc {int}
-autoinc(X) ::= .          {X = 0;}
-autoinc(X) ::= AUTOINCR.  {X = 1;}
 
 // The next group of rules parses the arguments to a REFERENCES clause
 // that determine if the referential integrity checking is deferred or
@@ -337,8 +341,7 @@ init_deferred_pred_opt(A) ::= .                       {A = 0;}
 init_deferred_pred_opt(A) ::= INITIALLY DEFERRED.     {A = 1;}
 init_deferred_pred_opt(A) ::= INITIALLY IMMEDIATE.    {A = 0;}
 
-tcons ::= cconsname(N) PRIMARY KEY LP sortlist(X) autoinc(I) RP. {
-  pParse->create_table_def.has_autoinc = I;
+tcons ::= cconsname(N) PRIMARY KEY LP sortlist(X) RP. {
   create_index_def_init(&pParse->create_index_def, NULL, &N, X,
                         SQL_INDEX_TYPE_CONSTRAINT_PK, SORT_ORDER_ASC, false);
   sqlAddPrimaryKey(pParse);

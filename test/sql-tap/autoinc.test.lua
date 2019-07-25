@@ -1,6 +1,6 @@
 #!/usr/bin/env tarantool
 test = require("sqltester")
-test:plan(47)
+test:plan(58)
 
 --!./tcltestrunner.lua
 -- 2004 November 12
@@ -537,11 +537,13 @@ test:do_catchsql_test(
 
 -- Allow the AUTOINCREMENT keyword inside the parentheses
 -- on a separate PRIMARY KEY designation.
+-- UPDATE: Changed in #4217. Now AUTOINCREMENT must follow the
+-- definition of the column to which it belongs.
 --
 test:do_execsql_test(
     "autoinc-7.1",
     [[
-        CREATE TABLE t7(x INTEGER, y REAL, PRIMARY KEY(x AUTOINCREMENT));
+        CREATE TABLE t7(x INTEGER AUTOINCREMENT, y REAL, PRIMARY KEY(x));
         INSERT INTO t7(y) VALUES(123);
         INSERT INTO t7(y) VALUES(234);
         DELETE FROM t7;
@@ -561,7 +563,7 @@ test:do_catchsql_test(
         CREATE TABLE t8(x TEXT PRIMARY KEY AUTOINCREMENT);
     ]], {
         -- <autoinc-7.2>
-        1, "Failed to create space 'T8': AUTOINCREMENT is only allowed on an INTEGER PRIMARY KEY or INT PRIMARY KEY"
+        1, "Can't create or modify index 'pk_unnamed_T8_1' in space 'T8': sequence cannot be used with a non-integer key"
         -- </autoinc-7.2>
     })
 
@@ -627,7 +629,7 @@ test:do_test(
     function()
         return test:execsql([[
             DROP TABLE IF EXISTS t7;
-            CREATE TABLE t7(x INT, y REAL, PRIMARY KEY(x AUTOINCREMENT));
+            CREATE TABLE t7(x INT AUTOINCREMENT, y REAL, PRIMARY KEY(x));
             INSERT INTO t7(y) VALUES(123);
             INSERT INTO t7(y) VALUES(234);
             DELETE FROM t7;
@@ -812,6 +814,144 @@ test:do_catchsql_test(
         -- <autoinc-gh-3670>
         1, "Type mismatch: can not convert a to integer"
         -- </autoinc-gh-3670>
+    })
+
+--
+-- gh-4217: make sure that AUTOINCREMENT can be used for any
+-- INTEGER field of PRIMARY KEY.
+--
+
+--
+-- Make sure AUTOINCREMENT works for a PRIMARY KEY that contains
+-- one column.
+--
+test:do_execsql_test(
+    "autoinc-11.1",
+    [[
+        CREATE TABLE t (i INT PRIMARY KEY AUTOINCREMENT, a INT);
+        INSERT INTO t VALUES (NULL, 1), (NULL, 1), (NULL, 1);
+        SELECT * FROM t;
+    ]], {
+        -- <autoinc-11.1>
+        1, 1, 2, 1, 3, 1
+        -- </autoinc-11.1>
+    })
+
+test:do_execsql_test(
+    "autoinc-11.2",
+    [[
+        DROP TABLE IF EXISTS t;
+        CREATE TABLE t (i INT AUTOINCREMENT, a INT, PRIMARY KEY(i));
+        INSERT INTO t VALUES (NULL, 1), (NULL, 1), (NULL, 1);
+        SELECT * FROM t;
+    ]], {
+        -- <autoinc-11.1>
+        1, 1, 2, 1, 3, 1
+        -- </autoinc-11.1>
+    })
+
+--
+-- Make sure AUTOINCREMENT works for any INTEGER field of PRIMARY
+-- KEY that contains more than one column.
+--
+test:do_execsql_test(
+    "autoinc-11.3",
+    [[
+        DROP TABLE t;
+        CREATE TABLE t (i TEXT, a INT AUTOINCREMENT, PRIMARY KEY (i, a));
+        INSERT INTO t VALUES (1, NULL), (1, NULL), (1, NULL);
+        SELECT * FROM t;
+    ]], {
+        -- <autoinc-11.3>
+        "1", 1, "1", 2, "1", 3
+        -- </autoinc-11.3>
+    })
+
+test:do_execsql_test(
+    "autoinc-11.4",
+    [[
+        DROP TABLE t;
+        CREATE TABLE t (i TEXT, a INT AUTOINCREMENT, PRIMARY KEY (a, i));
+        INSERT INTO t VALUES (1, NULL), (1, NULL), (1, NULL);
+        SELECT * FROM t;
+    ]], {
+        -- <autoinc-11.4>
+        "1", 1, "1", 2, "1", 3
+        -- </autoinc-11.4>
+    })
+
+-- Make sure that AUTOINCREMENT only works for PRIMARY KEY.
+test:do_catchsql_test(
+    "autoinc-11.5",
+    [[
+        DROP TABLE t;
+        CREATE TABLE t (i INT PRIMARY KEY, a INT AUTOINCREMENT);
+    ]], {
+        -- <autoinc-11.5>
+        1, "Can't create or modify index 'pk_unnamed_T_1' in space 'T': sequence field must be a part of the index"
+        -- </autoinc-11.5>
+    })
+
+test:do_catchsql_test(
+    "autoinc-11.6",
+    [[
+        CREATE TABLE t (i INT, a INT, b INT AUTOINCREMENT, PRIMARY KEY (a, i));
+    ]], {
+        -- <autoinc-11.6>
+        1, "Can't create or modify index 'pk_unnamed_T_1' in space 'T': sequence field must be a part of the index"
+        -- </autoinc-11.6>
+    })
+
+-- Make sure that AUTOINCREMENT only works for INTEGER field.
+test:do_catchsql_test(
+    "autoinc-11.7",
+    [[
+        CREATE TABLE t (i TEXT PRIMARY KEY AUTOINCREMENT);
+    ]], {
+        -- <autoinc-11.7>
+        1, "Can't create or modify index 'pk_unnamed_T_1' in space 'T': sequence cannot be used with a non-integer key"
+        -- </autoinc-11.7>
+    })
+
+test:do_catchsql_test(
+    "autoinc-11.8",
+    [[
+        CREATE TABLE t (i REAL PRIMARY KEY AUTOINCREMENT);
+    ]], {
+        -- <autoinc-11.7>
+        1, "Can't create or modify index 'pk_unnamed_T_1' in space 'T': sequence cannot be used with a non-integer key"
+        -- </autoinc-11.7>
+    })
+
+test:do_catchsql_test(
+    "autoinc-11.9",
+    [[
+        CREATE TABLE t (i BOOLEAN PRIMARY KEY AUTOINCREMENT);
+    ]], {
+        -- <autoinc-11.7>
+        1, "Can't create or modify index 'pk_unnamed_T_1' in space 'T': sequence cannot be used with a non-integer key"
+        -- </autoinc-11.7>
+    })
+
+test:do_catchsql_test(
+    "autoinc-11.10",
+    [[
+        CREATE TABLE t (i SCALAR PRIMARY KEY AUTOINCREMENT);
+    ]], {
+        -- <autoinc-11.7>
+        1, "Can't create or modify index 'pk_unnamed_T_1' in space 'T': sequence cannot be used with a non-integer key"
+        -- </autoinc-11.7>
+    })
+
+-- Make sure that there can be no more than one AUTOINCREMENT.
+test:do_catchsql_test(
+    "autoinc-11.11",
+    [[
+        CREATE TABLE t (i INT AUTOINCREMENT, a INT AUTOINCREMENT, PRIMARY KEY (i, a));
+    ]], {
+        -- <autoinc-11.7>
+        1, "Syntax error in CREATE TABLE: statement cannot have more than one AUTOINCREMENT"
+        -- </autoinc-11.7>
     })
 
 test:finish_test()

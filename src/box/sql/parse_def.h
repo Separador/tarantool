@@ -212,8 +212,12 @@ struct create_table_def {
 	uint32_t check_count;
 	/** Check constraint appeared in CREATE TABLE stmt. */
 	struct rlist new_check;
-	/** True, if table to be created has AUTOINCREMENT PK. */
-	bool has_autoinc;
+	/**
+	 * Field number of field with AUTOINCREMENT. If its value
+	 * is UINT32_MAX than there is no field with
+	 * AUTOINCREMENT.
+	 */
+	uint32_t autoinc_field;
 };
 
 struct create_view_def {
@@ -461,6 +465,7 @@ create_table_def_init(struct create_table_def *table_def, struct Token *name,
 			       if_not_exists);
 	rlist_create(&table_def->new_fkey);
 	rlist_create(&table_def->new_check);
+	table_def->autoinc_field = UINT32_MAX;
 }
 
 static inline void

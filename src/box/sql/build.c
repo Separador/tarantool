@@ -625,12 +625,6 @@ sqlAddPrimaryKey(struct Parse *pParse)
 		sql_create_index(pParse);
 		if (db->mallocFailed)
 			goto primary_key_exit;
-	} else if (pParse->create_table_def.has_autoinc) {
-		diag_set(ClientError, ER_CREATE_SPACE, space->def->name,
-			 "AUTOINCREMENT is only allowed on an INTEGER PRIMARY "\
-			 "KEY or INT PRIMARY KEY");
-		pParse->is_aborted = true;
-		goto primary_key_exit;
 	} else {
 		sql_create_index(pParse);
 		pList = NULL;
@@ -1049,18 +1043,9 @@ emitNewSysSequenceRecord(Parse *pParse, int reg_seq_id, const char *seq_name)
 }
 
 static int
-emitNewSysSpaceSequenceRecord(Parse *pParse, int reg_space_id, int reg_seq_id,
-			      struct index_def *idx_def)
+emitNewSysSpaceSequenceRecord(Parse *pParse, int reg_space_id, int reg_seq_id)
 {
-	struct key_part *part = &idx_def->key_def->parts[0];
-	int fieldno = part->fieldno;
-	char *path = NULL;
-	if (part->path != NULL) {
-		path = sqlDbStrNDup(pParse->db, part->path, part->path_len);
-		if (path == NULL)
-			return -1;
-		path[part->path_len] = 0;
-	}
+	uint32_t autoinc_field = pParse->create_table_def.autoinc_field;
 
 	Vdbe *v = sqlGetVdbe(pParse);
 	int first_col = pParse->nMem + 1;
@@ -1076,12 +1061,10 @@ emitNewSysSpaceSequenceRecord(Parse *pParse, int reg_space_id, int reg_seq_id,
 	sqlVdbeAddOp2(v, OP_Bool, true, first_col + 3);
 
 	/* 4. Field id. */
-	sqlVdbeAddOp2(v, OP_Integer, fieldno, first_col + 4);
+	sqlVdbeAddOp2(v, OP_Integer, autoinc_field, first_col + 4);
 
 	/* 5. Field path. */
-	sqlVdbeAddOp4(v, OP_String8, 0, first_col + 5, 0,
-		      path != NULL ? path : "",
-		      path != NULL ? P4_DYNAMIC : P4_STATIC );
+	sqlVdbeAddOp4(v, OP_String8, 0, first_col + 5, 0, "", P4_STATIC);
 
 	sqlVdbeAddOp3(v, OP_MakeRecord, first_col + 1, 5, first_col);
 	return first_col;
@@ -1350,7 +1333,7 @@ sqlEndTable(struct Parse *pParse)
 	 * Check to see if we need to create an _sequence table
 	 * for keeping track of autoincrement keys.
 	 */
-	if (pParse->create_table_def.has_autoinc) {
+	if (pParse->create_table_def.autoinc_field != UINT32_MAX) {
 		assert(reg_space_id != 0);
 		/* Do an insertion into _sequence. */
 		int reg_seq_id = ++pParse->nMem;
@@ -1363,9 +1346,9 @@ sqlEndTable(struct Parse *pParse)
 		save_record(pParse, BOX_SEQUENCE_ID, reg_seq_record + 1, 1,
 			    v->nOp - 1, true);
 		/* Do an insertion into _space_sequence. */
-		int reg_space_seq_record = emitNewSysSpaceSequenceRecord(pParse,
-							reg_space_id, reg_seq_id,
-							new_space->index[0]->def);
+		int reg_space_seq_record =
+			emitNewSysSpaceSequenceRecord(pParse, reg_space_id,
+						      reg_seq_id);
 		sqlVdbeAddOp3(v, OP_SInsert, BOX_SPACE_SEQUENCE_ID, 0,
 				  reg_space_seq_record);
 		save_record(pParse, BOX_SPACE_SEQUENCE_ID,
