@@ -1,10 +1,14 @@
 stages:
+  - bootstrap
   - test
+  - cleanup
 
 variables:
   IMAGE_TEST: "${CI_REGISTRY}/${CI_PROJECT_PATH}/testing/debian-stretch:latest"
   IMAGE_TEST_LTO: "${CI_REGISTRY}/${CI_PROJECT_PATH}/testing/debian-buster:latest"
   GITLAB_MAKE: "make -f .gitlab.mk"
+  IMAGE_PERF: "${CI_REGISTRY}/${CI_PROJECT_PATH}/perf/ubuntu-bionic:perf_master"
+  IMAGE_PERF_BUILT: "${CI_REGISTRY}/${CI_PROJECT_PATH}/perf_tmp/ubuntu-bionic:perf_${CI_COMMIT_SHORT_SHA}"
 
 # Tests
 
@@ -142,6 +146,115 @@ freebsd_12_release:
     - ${GITLAB_MAKE} vms_test_freebsd
   after_script:
     - ${GITLAB_MAKE} vms_shutdown
+
+# Perf
+
+perf_bootstrap:
+  only:
+    refs:
+      - "2.2"
+      - /^.*-perf$/
+  stage: bootstrap
+  tags:
+    - perf
+  script:
+    - ${GITLAB_MAKE} docker_perf_bootstrap
+
+perf_sysbench:
+  only:
+    refs:
+      - "2.2"
+      - /^.*-perf$/
+  image: ${IMAGE_PERF_BUILT}
+  stage: test
+  tags:
+    - docker_perf
+  script:
+    - ${GITLAB_MAKE} perf_sysbench
+
+perf_tpcc:
+  only:
+    refs:
+      - "2.2"
+      - /^.*-perf$/
+  image: ${IMAGE_PERF_BUILT}
+  stage: test
+  tags:
+    - docker_perf
+  script:
+    - ${GITLAB_MAKE} perf_tpcc
+
+perf_ycsb:
+  only:
+    refs:
+      - "2.2"
+      - /^.*-perf$/
+  image: ${IMAGE_PERF_BUILT}
+  stage: test
+  tags:
+    - docker_perf
+  script:
+    - ${GITLAB_MAKE} perf_ycsb
+
+perf_nosqlbench:
+  only:
+    refs:
+      - "2.2"
+      - /^.*-perf$/
+  image: ${IMAGE_PERF_BUILT}
+  stage: test
+  tags:
+    - docker_perf
+  script:
+    - ${GITLAB_MAKE} perf_nosqlbench
+
+perf_cbench:
+  only:
+    refs:
+      - "2.2"
+      - /^.*-perf$/
+  image: ${IMAGE_PERF_BUILT}
+  stage: test
+  tags:
+    - docker_perf
+  script:
+    - ${GITLAB_MAKE} perf_cbench
+
+perf_linkbench:
+  only:
+    refs:
+      - "2.2"
+      - /^.*-perf$/
+  image: ${IMAGE_PERF_BUILT}
+  stage: test
+  tags:
+    - docker_perf_hdd
+  script:
+    - ${GITLAB_MAKE} perf_linkbench
+
+perf_linkbench_ssd:
+  only:
+    refs:
+      - "2.2"
+      - /^.*-perf$/
+  image: ${IMAGE_PERF_BUILT}
+  stage: test
+  tags:
+    - docker_perf_ssd
+  script:
+    - ${GITLAB_MAKE} perf_linkbench
+
+remove_images:
+  only:
+    refs:
+      - "2.2"
+      - /^.*-perf$/
+  stage: cleanup
+  when: always
+  tags:
+    - perf
+  script:
+    - ${GITLAB_MAKE} docker_perf_tmp_image_remove
 
 # Packs
 

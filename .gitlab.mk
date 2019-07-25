@@ -41,6 +41,7 @@ test_%_no_deps: git_submodule_update
 
 GITLAB_REGISTRY?=registry.gitlab.com
 DOCKER_BUILD=docker build --network=host -f - .
+DOCKERFILE_BUILD=docker build --network=host
 
 define DEBIAN_STRETCH_DOCKERFILE
 FROM packpack/packpack:debian-stretch
@@ -78,6 +79,23 @@ docker_bootstrap:
 	docker push ${DEBIAN_STRETCH_IMAGE}:latest
 	docker push ${DEBIAN_BUSTER_IMAGE}:latest
 
+docker_perf_bootstrap:
+	docker login -u ${CI_REGISTRY_USER} -p ${CI_REGISTRY_PASSWORD} \
+		${CI_REGISTRY}
+	# TODO: !!! TEMPORARY !!! use from repository
+	rm -rf images/runners
+	cp -rfp /home/aleks.tikhonov/Workspaces/runners images/.
+	${DOCKERFILE_BUILD} -t ${IMAGE_PERF} -f images/Dockerfile.ubuntu_perf images
+	docker push ${IMAGE_PERF}
+	${DOCKERFILE_BUILD} --build-arg image_from=${IMAGE_PERF} -t ${IMAGE_PERF_BUILT} -f images/Dockerfile.ubuntu_perf_build .
+	docker push ${IMAGE_PERF_BUILT}
+
+# #####################################################
+# Remove temporary performance image from the test host
+# #####################################################
+docker_perf_tmp_image_remove:
+	docker rmi --force ${IMAGE_PERF_BUILT}
+
 # #################################
 # Run tests under a virtual machine
 # #################################
@@ -105,3 +123,25 @@ vms_shutdown:
 package: git_submodule_update
 	git clone https://github.com/packpack/packpack.git packpack
 	PACKPACK_EXTRA_DOCKER_RUN_PARAMS='--network=host' ./packpack/packpack
+
+# ###################
+# Performance testing
+# ###################
+
+perf_sysbench:
+	/opt/runners/sysbench-benchmarking/run.sh
+
+perf_tpcc:
+	/opt/runners/tpcc-benchmarking/run.sh
+
+perf_ycsb:
+	/opt/runners/ycsb-benchmarking/run.sh ${RUNS}
+
+perf_nosqlbench:
+	/opt/runners/nosqlbench-benchmarking/run.sh
+
+perf_cbench:
+	/opt/runners/cbench-benchmarking/run.sh
+
+perf_linkbench:
+	/opt/runners/linkbench-benchmarking/run.sh

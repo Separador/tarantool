@@ -1,0 +1,67 @@
+FROM ubuntu:18.04
+
+RUN apt-get -y update && apt-get install -y -f \
+    numactl gcc libc6-dev zlib1g-dev make libmysqlclient-dev \
+    ssh vim git dh-autoreconf pkg-config libicu-dev \
+    build-essential cmake coreutils sed libreadline-dev \
+    libncurses5-dev libyaml-dev libssl-dev libcurl4-openssl-dev \
+    libunwind-dev python python-pip python-setuptools python-dev \
+    python-msgpack python-yaml python-argparse python-six python-gevent \
+    gdb net-tools psmisc
+
+# benchmark-runners
+# !!! TEMPORARY !!!
+#RUN git clone https://gitlab.com/tarantool/tarantool-benchmarks-runner.git \
+#    /opt/runners && \
+COPY runners /opt/runners
+
+# tarantool-c
+RUN git clone --recursive https://github.com/tarantool/tarantool-c.git \
+    /opt/tarantool-c
+WORKDIR /opt/tarantool-c/third_party/msgpuck/
+RUN cmake . && make && make install
+WORKDIR /opt/tarantool-c
+RUN cmake . && make -j && make install
+
+# msgpack-c
+RUN git clone https://github.com/msgpack/msgpack-c.git /opt/msgpack-c
+WORKDIR /opt/msgpack-c
+RUN cmake . && make -j && make install
+
+# sysbench
+RUN git clone https://github.com/iproha94/sysbench.git /opt/sysbench
+WORKDIR /opt/sysbench
+RUN make clean ; ./autogen.sh && ./configure --with-tarantool --without-mysql && \
+    make -j && make install && ls -al /opt/sysbench/src/drivers/tarantool && \
+    sed 's# CHAR(# VARCHAR(#g' -i /opt/sysbench/src/lua/oltp_common.lua && \
+    cp /opt/sysbench/src/lua/oltp_common.lua \
+        /usr/local/share/sysbench/oltp_common.lua
+
+# tpcc-tarantool
+RUN git clone https://github.com/tarantool/tpcc.git /opt/tpcc
+WORKDIR /opt/tpcc/src
+RUN make
+
+# YCSB
+RUN git clone https://github.com/brianfrankcooper/YCSB.git /opt/ycsb
+RUN apt-get update -y && apt-get install -y gtk-update-icon-cache=3.22.30-1ubuntu3 || true
+RUN apt-get install --fix-missing -y -f default-jdk maven
+WORKDIR /opt/ycsb
+RUN mvn -pl com.yahoo.ycsb:tarantool-binding -am clean package
+
+# nosqlbench
+RUN git clone --recursive https://github.com/tarantool/nosqlbench.git \
+        /opt/nosqlbench
+WORKDIR /opt/nosqlbench
+RUN git submodule foreach --recursive
+RUN git pull origin master
+RUN apt-get install -y -f libev-dev
+RUN cmake . && make -j
+
+# linkbench
+RUN git clone https://github.com/tarantool/linkbench.git -b update-fixes \
+	/opt/linkbench
+RUN apt-get install --fix-missing -y -f default-jdk maven luarocks \
+    google-perftools libgoogle-perftools-dev
+WORKDIR /opt/linkbench
+RUN luarocks install https://raw.githubusercontent.com/tarantool/gperftools/master/rockspecs/gperftools-scm-1.rockspec --local
