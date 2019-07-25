@@ -1,0 +1,15 @@
+ARG image_from
+FROM ${image_from}
+
+COPY . /opt/tarantool
+WORKDIR /opt/tarantool
+RUN git submodule update --recursive --init --force
+RUN cmake . -DENABLE_DIST=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo >cmake.log && make -j >build.log && make install >install.log
+
+# cbench
+RUN git clone https://github.com/tarantool/cbench.git /opt/cbench
+WORKDIR /opt/cbench
+RUN cmake . -DCMAKE_BUILD_TYPE=RelWithDebInfo && make && make install
+
+# reset the workdir to tarantool path
+WORKDIR /opt/tarantool
