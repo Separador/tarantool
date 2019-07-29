@@ -332,6 +332,21 @@ sql_select_expand_from_tables(struct Select *select)
 	return walker.u.pSrcList;
 }
 
+bool
+sql_check_compound_with(struct Select *select)
+{
+	if (select->pWith != NULL)
+		return true;
+	struct SrcList *list = select->pSrc;
+	int item_count = sql_src_list_entry_count(list);
+	for (int i = 0; i < item_count; ++i) {
+		if (list->a[i].pSelect != NULL)
+			if (sql_check_compound_with(list->a[i].pSelect) == true)
+				return true;
+	}
+	return false;
+}
+
 /*
  * Given 1 to 3 identifiers preceding the JOIN keyword, determine the
  * type of join.  Return an integer constant that expresses that type

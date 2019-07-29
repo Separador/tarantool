@@ -1,6 +1,6 @@
 #!/usr/bin/env tarantool
 test = require("sqltester")
-test:plan(73)
+test:plan(80)
 
 --!./tcltestrunner.lua
 -- 2002 February 26
@@ -1231,6 +1231,101 @@ test:do_catchsql_test(
         -- <view-23.8>
         0
         -- </view-23.8>
+    })
+
+-- gh-4149: Check error message for view creation with (nested)
+-- select with <WITH> clause.
+test:do_execsql_test(
+    "view-24.1",
+    [[
+        CREATE TABLE ts (s1 INT PRIMARY KEY);
+        INSERT INTO ts VALUES (1);
+    ]], {
+        -- <view-24.1>
+        -- </view-24.1>
+    })
+
+test:do_catchsql_test(
+    "view-24.2",
+    [[
+        CREATE VIEW v AS WITH w(id) AS (
+            SELECT 1)
+          SELECT * FROM ts;
+    ]], {
+        -- <view-24.2>
+        1,"Failed to create view 'V' with <WITH>"
+        -- </view-24.2>
+    })
+
+test:do_catchsql_test(
+    "view-24.3",
+    [[
+        CREATE VIEW v AS WITH RECURSIVE w AS (
+            SELECT s1 FROM ts
+            UNION ALL
+            SELECT s1+1 FROM w WHERE s1 < 4)
+          SELECT * FROM w;
+    ]], {
+        -- <view-24.3>
+        1,"Failed to create view 'V' with <WITH>"
+        -- </view-24.3>
+    })
+
+test:do_catchsql_test(
+    "view-24.4",
+    [[
+        CREATE VIEW v AS SELECT * FROM (
+            WITH RECURSIVE w AS (
+                SELECT s1 FROM ts
+                UNION ALL
+                SELECT s1+1 FROM w WHERE s1 < 4)
+              SELECT * FROM w);
+    ]], {
+        -- <view-24.4>
+        1,"Failed to create view 'V' with <WITH>"
+        -- </view-24.4>
+    })
+
+test:do_catchsql_test(
+    "view-24.5",
+    [[
+        CREATE VIEW v AS SELECT * FROM (
+            SELECT * FROM (
+                WITH RECURSIVE w AS (
+                    SELECT s1 FROM ts
+                    UNION ALL
+                    SELECT s1+1 FROM w WHERE s1 < 4)
+                  SELECT * FROM w));
+    ]], {
+        -- <view-24.5>
+        1,"Failed to create view 'V' with <WITH>"
+        -- </view-24.5>
+    })
+
+test:do_catchsql_test(
+    "view-24.6",
+    [[
+        CREATE VIEW v AS SELECT * FROM
+            (SELECT 1),
+            (SELECT 2) JOIN
+            (WITH RECURSIVE w AS (
+                SELECT s1 FROM ts
+                UNION ALL
+                SELECT s1+1 FROM w WHERE s1 < 4)
+                SELECT * FROM w);
+    ]], {
+        -- <view-24.6>
+        1,"Failed to create view 'V' with <WITH>"
+        -- </view-24.6>
+    })
+
+test:do_execsql_test(
+    "view-24.7",
+    [[
+        DROP TABLE ts
+    ]], {
+        -- <view-24.7>
+        -- </view-24.7>
     })
 
 test:finish_test()

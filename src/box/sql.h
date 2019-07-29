@@ -324,6 +324,16 @@ struct SrcList *
 sql_select_expand_from_tables(struct Select *select);
 
 /**
+ * Check if select has any compound selects with <WITH> clause.
+ *
+ * @param select Select to be checked.
+ * @retval true Has <WITH>s.
+ * @retval false Hasn't <WITH>s.
+*/
+bool
+sql_check_compound_with(struct Select *select);
+
+/**
  * Temporary getter in order to avoid including sqlInt.h
  * in alter.cc.
  *

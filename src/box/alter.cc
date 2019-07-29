@@ -1908,6 +1908,9 @@ on_replace_dd_space(struct trigger * /* trigger */, void *event)
 			auto select_guard = make_scoped_guard([=] {
 				sql_select_delete(sql_get(), select);
 			});
+			if (sql_check_compound_with(select) == true)
+				tnt_raise(ClientError, ER_CREATE_VIEW_WITH,
+					  def->name);
 			const char *disappeared_space;
 			if (update_view_references(select, 1, false,
 						   &disappeared_space) != 0) {
