@@ -6,7 +6,7 @@ local socket = require('socket')
 local fio = require('fio')
 local uuid = require('uuid')
 local msgpack = require('msgpack')
-test:plan(104)
+test:plan(105)
 
 --------------------------------------------------------------------------------
 -- Invalid values
@@ -565,6 +565,23 @@ os.remove(path)
 os.exit(0)
 ]]
 test:is(run_script(code), 0, "log_nonblock")
+
+--
+-- gh-4138: check getaddrinfo() error and panic after that.
+--
+code=[[
+local socket = require('socket')
+local log = require('log')
+local fio = require('fio')
+
+path = fio.pathjoin(fio.cwd(), 'log_unix_socket_test.sock')
+unix_socket = socket('AF_UNIX', 'SOCK_DGRAM', 0)
+unix_socket:bind('unix/', path)
+
+opt = string.format("syslog:server=non_exists_hostname:%s,identity=tarantool", path)
+box.cfg{log = opt, log_nonblock=true}
+]]
+test:is(run_script(code), PANIC, "log_nonblock")
 
 --
 -- Crash (instead of panic) when trying to recover a huge tuple.

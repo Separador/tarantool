@@ -506,10 +506,15 @@ syslog_connect_remote(const char *server_address)
 	hints.ai_protocol = IPPROTO_UDP;
 
 	ret = getaddrinfo(remote, portnum, &hints, &inf);
-	if (ret < 0) {
+	if (ret != 0) {
 		errno = EIO;
 		diag_set(SystemError, "getaddrinfo: %s",
 			 gai_strerror(ret));
+		/*
+		 * We need to log a diagnostics here until stacked
+		 * diagnostics will be implemented (#1148).
+		 */
+		diag_log();
 		goto out;
 	}
 	for (ptr = inf; ptr; ptr = ptr->ai_next) {

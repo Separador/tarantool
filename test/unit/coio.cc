@@ -72,7 +72,7 @@ static void
 test_getaddrinfo(void)
 {
 	header();
-	plan(1);
+	plan(3);
 	const char *host = "127.0.0.1";
 	const char *port = "3333";
 	struct addrinfo *i;
@@ -80,6 +80,12 @@ test_getaddrinfo(void)
 	int rc = coio_getaddrinfo(host, port, NULL, &i, 1);
 	is(rc, 0, "getaddrinfo");
 	freeaddrinfo(i);
+
+	/* gh-4138: Check getaddrinfo() error. */
+	isnt(coio_getaddrinfo("non_exists_hostname", port, NULL, &i, 1), 0,
+	     "getaddrinfo error");
+	isnt(strstr(diag_get()->last->errmsg, "getaddrinfo"), NULL,
+	     "getaddrinfo error message");
 
 	/*
 	 * gh-4209: 0 timeout should not be a special value and
