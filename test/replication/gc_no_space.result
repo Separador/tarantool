@@ -250,7 +250,7 @@ gc = box.info.gc()
 ---
 - 2
 ...
-gc.signature == gc.checkpoints[2].signature
+gc.signature == gc.checkpoints[1].signature
 ---
 - true
 ...
@@ -272,7 +272,7 @@ gc = box.info.gc()
 ---
 - 2
 ...
-gc.signature == gc.checkpoints[2].signature
+gc.signature == gc.checkpoints[1].signature
 ---
 - true
 ...

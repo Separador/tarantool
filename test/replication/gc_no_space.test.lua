@@ -106,7 +106,7 @@ check_snap_count(2)
 gc = box.info.gc()
 #gc.consumers -- 0
 #gc.checkpoints -- 2
-gc.signature == gc.checkpoints[2].signature
+gc.signature == gc.checkpoints[1].signature
 
 s:drop()
 box.schema.user.revoke('guest', 'replication')
@@ -116,4 +116,4 @@ test_run:cleanup_cluster()
 test_run:cmd("restart server default")
 gc = box.info.gc()
 #gc.checkpoints -- 2
-gc.signature == gc.checkpoints[2].signature
+gc.signature == gc.checkpoints[1].signature

@@ -371,14 +371,6 @@ lbox_info_gc_call(struct lua_State *L)
 
 	lua_newtable(L);
 
-	lua_pushstring(L, "vclock");
-	lbox_pushvclock(L, &gc.vclock);
-	lua_settable(L, -3);
-
-	lua_pushstring(L, "signature");
-	luaL_pushint64(L, vclock_sum(&gc.vclock));
-	lua_settable(L, -3);
-
 	lua_pushstring(L, "checkpoint_is_in_progress");
 	lua_pushboolean(L, gc.checkpoint_is_in_progress);
 	lua_settable(L, -3);
@@ -386,9 +378,13 @@ lbox_info_gc_call(struct lua_State *L)
 	lua_pushstring(L, "checkpoints");
 	lua_newtable(L);
 
+	struct vclock *checkpoint_vclock = NULL;
+
 	count = 0;
 	struct gc_checkpoint *checkpoint;
 	gc_foreach_checkpoint(checkpoint) {
+		if (checkpoint_vclock == NULL)
+			checkpoint_vclock = &checkpoint->vclock;
 		lua_createtable(L, 0, 2);
 
 		lua_pushstring(L, "vclock");
@@ -416,12 +412,15 @@ lbox_info_gc_call(struct lua_State *L)
 	lua_pushstring(L, "consumers");
 	lua_newtable(L);
 
+	struct vclock *gc_vclock = NULL;
 	struct gc_consumer_iterator consumers;
 	gc_consumer_iterator_init(&consumers);
 
 	count = 0;
 	struct gc_consumer *consumer;
 	while ((consumer = gc_consumer_iterator_next(&consumers)) != NULL) {
+		if (gc_vclock == NULL)
+			gc_vclock = &consumer->vclock;
 		lua_createtable(L, 0, 3);
 
 		lua_pushstring(L, "name");
@@ -439,7 +438,17 @@ lbox_info_gc_call(struct lua_State *L)
 		lua_rawseti(L, -2, ++count);
 	}
 	lua_settable(L, -3);
+	if (gc_vclock == NULL ||
+	    vclock_sum(gc_vclock) > vclock_sum(checkpoint_vclock))
+		gc_vclock = checkpoint_vclock;
 
+	lua_pushstring(L, "vclock");
+	lbox_pushvclock(L, gc_vclock);
+	lua_settable(L, -3);
+
+	lua_pushstring(L, "signature");
+	luaL_pushint64(L, vclock_sum(gc_vclock));
+	lua_settable(L, -3);
 	return 1;
 }
 
