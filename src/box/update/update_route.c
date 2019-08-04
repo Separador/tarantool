@@ -109,6 +109,36 @@ update_route_branch_array(struct update_field *next_hop,
 	return op->meta->do_cb(op, next_hop);
 }
 
+/**
+ * Do the actual branch, but by a map and a key in that map. Works
+ * exactly the same as the array-counterpart.
+ */
+static int
+update_route_branch_map(struct update_field *next_hop,
+			const struct update_field *child, const char *key,
+			int key_len, const char *parent)
+{
+	struct update_op *op = child->bar.op;
+	if (child->type != UPDATE_BAR || child->bar.path_len > 0 ||
+	    (op->opcode != '!' && op->opcode != '#')) {
+		return update_map_create_with_child(next_hop, child, key,
+						    key_len, parent);
+	}
+	op->token_type = JSON_TOKEN_STR;
+	op->key = key;
+	op->key_len = key_len;
+	const char *data = parent;
+	uint32_t field_count = mp_decode_map(&data);
+	const char *end = data;
+	for (uint32_t i = 0; i < field_count; ++i) {
+		mp_next(&end);
+		mp_next(&end);
+	}
+	if (update_map_create(next_hop, parent, data, end, field_count) != 0)
+		return -1;
+	return op->meta->do_cb(op, next_hop);
+}
+
 struct update_field *
 update_route_branch(struct update_field *field, struct update_op *new_op)
 {
@@ -205,19 +235,6 @@ update_route_branch(struct update_field *field, struct update_op *new_op)
 	} else {
 		next_hop = field;
 	}
-	if (type == MP_MAP) {
-		diag_set(ClientError, ER_UNSUPPORTED, "update",
-			 "path intersection on map");
-		return NULL;
-	}
-	if (new_token.type != JSON_TOKEN_NUM) {
-		update_err(new_op, "can not update array by non-integer index");
-		return NULL;
-	}
-	if (type != MP_ARRAY) {
-		update_err_no_such_field(new_op);
-		return NULL;
-	}
 
 	int path_offset = old_path_lexer.offset;
 	struct update_field child = *field;
@@ -245,11 +262,34 @@ update_route_branch(struct update_field *field, struct update_op *new_op)
 		 */
 	}
 
-	new_op->token_type = JSON_TOKEN_NUM;
-	new_op->field_no = new_token.num;
-	if (update_route_branch_array(next_hop, &child, old_token.num,
-				      parent) != 0)
+	if (type == MP_ARRAY) {
+		if (new_token.type != JSON_TOKEN_NUM) {
+			update_err(new_op, "can not update array by "\
+				   "non-integer index");
+			return NULL;
+		}
+		new_op->token_type = JSON_TOKEN_NUM;
+		new_op->field_no = new_token.num;
+		if (update_route_branch_array(next_hop, &child, old_token.num,
+					      parent) != 0)
+			return NULL;
+	} else if (type == MP_MAP) {
+		if (new_token.type != JSON_TOKEN_STR) {
+			update_err(new_op, "can not update map by "\
+				   "non-string key");
+			return NULL;
+		}
+		new_op->token_type = JSON_TOKEN_STR;
+		new_op->key = new_token.str;
+		new_op->key_len = new_token.len;
+		if (update_route_branch_map(next_hop, &child, old_token.str,
+					    old_token.len, parent) != 0)
+			return NULL;
+	} else {
+		update_err_no_such_field(new_op);
 		return NULL;
+	}
+
 	if (! transform_root) {
 		field->type = UPDATE_ROUTE;
 		field->route.path = old_path;

@@ -45,6 +45,7 @@ add_library(tuple STATIC
     update/update_array.c
     update/update_bar.c
     update/update_route.c
+    update/update_map.c
     tuple_compare.cc
     tuple_extract_key.cc
     tuple_hash.cc

@@ -118,6 +118,8 @@ update_field_sizeof(struct update_field *field)
 		return update_bar_sizeof(field);
 	case UPDATE_ROUTE:
 		return update_route_sizeof(field);
+	case UPDATE_MAP:
+		return update_map_sizeof(field);
 	default:
 		unreachable();
 	}
@@ -146,6 +148,8 @@ update_field_store(struct update_field *field, char *out, char *out_end)
 		return update_bar_store(field, out, out_end);
 	case UPDATE_ROUTE:
 		return update_route_store(field, out, out_end);
+	case UPDATE_MAP:
+		return update_map_store(field, out, out_end);
 	default:
 		unreachable();
 	}
