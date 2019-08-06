@@ -22,6 +22,9 @@ ffi.cdef[[
     void
     say_set_log_format(enum say_format format);
 
+    void
+    say_logger_init(const char *init_str, int level, int nonblock,
+        const char *format, int background);
 
     extern sayfunc_t _say;
     extern struct ev_loop;
@@ -155,6 +158,30 @@ local compat_v16 = {
     end;
 }
 
+local function init(args)
+    args = args or {}
+    assert(type(args) == 'table', "init(args): expected 'args' to be a 'table'")
+
+    args.format = args.format or "plain"
+    assert(type(args.format) == 'string',
+        "init(args): expected 'args.format' to be a 'string'")
+
+    args.level = args.level or 5
+    assert(type(args.level) == 'number',
+        "init(args): expected 'args.level' to be a 'number'")
+
+    args.background = args.background or false
+    assert(type(args.background) == 'boolean',
+        "init(args): expected 'args.background' to be a 'boolean'")
+
+    args.nonblock = args.nonblock or true
+    assert(type(args.nonblock) == 'boolean',
+        "init(args): expected 'args.nonblock' to be a 'boolean'")
+
+
+    ffi.C.say_logger_init(args.init_str, args.level, args.nonblock, args.format, args.background)
+end
+
 return setmetatable({
     warn = say_closure(S_WARN);
     info = say_closure(S_INFO);
@@ -165,6 +192,7 @@ return setmetatable({
     pid = log_pid;
     level = log_level;
     log_format = log_format;
+    init = init;
 }, {
     __index = compat_v16;
 })
