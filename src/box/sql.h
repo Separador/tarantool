@@ -68,6 +68,7 @@ struct Expr;
 struct Parse;
 struct Select;
 struct Table;
+struct func_def;
 struct sql_trigger;
 struct space_def;
 

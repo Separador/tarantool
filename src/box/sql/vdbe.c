@@ -41,6 +41,8 @@
  */
 #include "box/box.h"
 #include "box/error.h"
+#include "box/func.h"
+#include "box/func_def.h"
 #include "box/fk_constraint.h"
 #include "box/txn.h"
 #include "box/tuple.h"
@@ -1720,7 +1722,7 @@ case OP_BuiltinFunction0: {
 	int n;
 	sql_context *pCtx;
 
-	assert(pOp->p4type==P4_FUNCDEF);
+	assert(pOp->p4type == P4_FUNC);
 	n = pOp->p5;
 	assert(pOp->p3>0 && pOp->p3<=(p->nMem+1 - p->nCursor));
 	assert(n==0 || (pOp->p2>0 && pOp->p2+n<=(p->nMem+1 - p->nCursor)+1));
@@ -1728,7 +1730,7 @@ case OP_BuiltinFunction0: {
 	pCtx = sqlDbMallocRawNN(db, sizeof(*pCtx) + (n-1)*sizeof(sql_value*));
 	if (pCtx==0) goto no_mem;
 	pCtx->pOut = 0;
-	pCtx->pFunc = pOp->p4.pFunc;
+	pCtx->func = pOp->p4.func;
 	pCtx->iOp = (int)(pOp - aOp);
 	pCtx->pVdbe = p;
 	pCtx->argc = n;
@@ -1763,7 +1765,9 @@ case OP_BuiltinFunction: {
 	}
 #endif
 	pCtx->is_aborted = false;
-	(*pCtx->pFunc->xSFunc)(pCtx, pCtx->argc, pCtx->argv);/* IMP: R-24505-23230 */
+	assert(pCtx->func->def->language == FUNC_LANGUAGE_SQL_BUILTIN);
+	struct func_sql_builtin *func = (struct func_sql_builtin *)pCtx->func;
+	func->call(pCtx, pCtx->argc, pCtx->argv);
 
 	/* If the function returned an error, throw an exception */
 	if (pCtx->is_aborted)
@@ -5021,7 +5025,7 @@ case OP_AggStep0: {
 	int n;
 	sql_context *pCtx;
 
-	assert(pOp->p4type==P4_FUNCDEF);
+	assert(pOp->p4type == P4_FUNC);
 	n = pOp->p5;
 	assert(pOp->p3>0 && pOp->p3<=(p->nMem+1 - p->nCursor));
 	assert(n==0 || (pOp->p2>0 && pOp->p2+n<=(p->nMem+1 - p->nCursor)+1));
@@ -5029,7 +5033,7 @@ case OP_AggStep0: {
 	pCtx = sqlDbMallocRawNN(db, sizeof(*pCtx) + (n-1)*sizeof(sql_value*));
 	if (pCtx==0) goto no_mem;
 	pCtx->pMem = 0;
-	pCtx->pFunc = pOp->p4.pFunc;
+	pCtx->func = pOp->p4.func;
 	pCtx->iOp = (int)(pOp - aOp);
 	pCtx->pVdbe = p;
 	pCtx->argc = n;
@@ -5071,7 +5075,9 @@ case OP_AggStep: {
 	pCtx->pOut = &t;
 	pCtx->is_aborted = false;
 	pCtx->skipFlag = 0;
-	(pCtx->pFunc->xSFunc)(pCtx,pCtx->argc,pCtx->argv); /* IMP: R-24505-23230 */
+	assert(pCtx->func->def->language == FUNC_LANGUAGE_SQL_BUILTIN);
+	struct func_sql_builtin *func = (struct func_sql_builtin *)pCtx->func;
+	func->call(pCtx, pCtx->argc, pCtx->argv);
 	if (pCtx->is_aborted) {
 		sqlVdbeMemRelease(&t);
 		goto abort_due_to_error;
@@ -5103,7 +5109,7 @@ case OP_AggFinal: {
 	assert(pOp->p1>0 && pOp->p1<=(p->nMem+1 - p->nCursor));
 	pMem = &aMem[pOp->p1];
 	assert((pMem->flags & ~(MEM_Null|MEM_Agg))==0);
-	if (sqlVdbeMemFinalize(pMem, pOp->p4.pFunc) != 0)
+	if (sql_vdbemem_finalize(pMem, pOp->p4.func) != 0)
 		goto abort_due_to_error;
 	UPDATE_MAX_BLOBSIZE(pMem);
 	if (sqlVdbeMemTooBig(pMem)) {
