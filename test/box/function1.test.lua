@@ -294,6 +294,8 @@ ok == true
 
 box.func.LUA:call({"return 1 + 1"})
 
+box.schema.func.drop("SUM")
+
 -- Introduce function options
 box.schema.func.create('test', {body = "function(tuple) return tuple end", is_deterministic = true, opts = {is_multikey = true}})
 box.func['test'].is_multikey == true

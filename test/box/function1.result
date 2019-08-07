@@ -825,6 +825,10 @@ box.func.LUA:call({"return 1 + 1"})
 ---
 - 2
 ...
+box.schema.func.drop("SUM")
+---
+- error: 'Can''t drop function 1: function is SQL builtin'
+...
 -- Introduce function options
 box.schema.func.create('test', {body = "function(tuple) return tuple end", is_deterministic = true, opts = {is_multikey = true}})
 ---

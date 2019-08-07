@@ -68,6 +68,7 @@ struct Expr;
 struct Parse;
 struct Select;
 struct Table;
+struct func_def;
 struct sql_trigger;
 struct space_def;
 
@@ -347,6 +348,10 @@ sql_src_list_entry_name(const struct SrcList *list, int i);
 /** Delete an entire SrcList including all its substructure. */
 void
 sqlSrcListDelete(struct sql *db, struct SrcList *list);
+
+/** Construct a SQL builtin function object. */
+struct func *
+func_sql_builtin_new(struct func_def *def);
 
 /**
  * Auxiliary VDBE structure to speed-up tuple data field access.

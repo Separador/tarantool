@@ -38,6 +38,9 @@
 #include "sqlInt.h"
 #include <stdlib.h>
 #include <string.h>
+#include "box/func.h"
+#include "box/func_def.h"
+#include "box/schema.h"
 
 /*
  * Walk the expression tree pExpr and increase the aggregate function
@@ -596,27 +599,28 @@ resolveExprStep(Walker * pWalker, Expr * pExpr)
 			int is_agg = 0;	/* True if is an aggregate function */
 			int nId;	/* Number of characters in function name */
 			const char *zId;	/* The function name. */
-			FuncDef *pDef;	/* Information about the function */
 
 			assert(!ExprHasProperty(pExpr, EP_xIsSelect));
 			zId = pExpr->u.zToken;
 			nId = sqlStrlen30(zId);
-			pDef = sqlFindFunction(pParse->db, zId, n, 0);
-			if (pDef == 0) {
-				pDef =
-				    sqlFindFunction(pParse->db, zId, -2,0);
-				if (pDef == 0) {
+			struct func *func = sql_func_by_signature(zId, n);
+			if (func == NULL) {
+				func = func_by_name(zId, nId);
+				if (func == NULL || !func->def->exports.sql)
 					no_such_func = 1;
-				} else {
+				else
 					wrong_num_args = 1;
-				}
 			} else {
-				is_agg = pDef->xFinalize != 0;
-				pExpr->type = pDef->ret_type;
+				is_agg = func->def->language ==
+					 FUNC_LANGUAGE_SQL_BUILTIN &&
+					 func->def->aggregate ==
+					 FUNC_AGGREGATE_GROUP;
+				pExpr->type = func->def->returns;
 				const char *err =
 					"second argument to likelihood() must "\
 					"be a constant between 0.0 and 1.0";
-				if (pDef->funcFlags & SQL_FUNC_UNLIKELY) {
+				if (sql_func_flag_is_set(func,
+							 SQL_FUNC_UNLIKELY)) {
 					ExprSetProperty(pExpr,
 							EP_Unlikely | EP_Skip);
 					if (n == 2) {
@@ -643,19 +647,17 @@ resolveExprStep(Walker * pWalker, Expr * pExpr)
 						 */
 						/* TUNING: unlikely() probability is 0.0625.  likely() is 0.9375 */
 						pExpr->iTable =
-						    pDef->zName[0] ==
-						    'u' ? 8388608 : 125829120;
+						    func->def->name[0] == 'u' ?
+						    8388608 : 125829120;
 					}
 				}
-				if ((pDef->funcFlags & SQL_FUNC_CONSTANT) != 0) {
+				if (func->def->is_deterministic) {
 					/* For the purposes of the EP_ConstFunc flag, date and time
 					 * functions and other functions that change slowly are considered
 					 * constant because they are constant for the duration of one query
 					 */
 					ExprSetProperty(pExpr, EP_ConstFunc);
-				}
-				if ((pDef->funcFlags & SQL_FUNC_CONSTANT) ==
-				    0) {
+				} else {
 					/* Date/time functions that use 'now', and other functions
 					 * that might change over time cannot be used
 					 * in an index.
@@ -698,18 +700,13 @@ resolveExprStep(Walker * pWalker, Expr * pExpr)
 					pExpr->op2++;
 					pNC2 = pNC2->pNext;
 				}
-				assert(pDef != 0);
+				assert(func != NULL);
 				if (pNC2) {
-					assert(SQL_FUNC_MINMAX ==
-					       NC_MinMaxAgg);
-					testcase((pDef->
-						  funcFlags &
-						  SQL_FUNC_MINMAX) != 0);
-					pNC2->ncFlags |=
-					    NC_HasAgg | (pDef->
-							 funcFlags &
-							 SQL_FUNC_MINMAX);
-
+					pNC2->ncFlags |= NC_HasAgg;
+					if (sql_func_flag_is_set(func,
+							         SQL_FUNC_MIN |
+								 SQL_FUNC_MAX))
+						pNC2->ncFlags |= NC_MinMaxAgg;
 				}
 				pNC->ncFlags |= NC_AllowAgg;
 			}
