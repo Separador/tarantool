@@ -71,13 +71,25 @@ test:do_execsql_test(
 
 global_counter = 0
 
-counter = function(str)
-    global_counter = global_counter + 1
-    return global_counter
-end
+box.schema.func.create('COUNTER1', {language = 'Lua', is_deterministic = false,
+                       param_list = {'any'}, returns = 'integer',
+                       exports = {'SQL', 'LUA'},
+                       body = [[
+                           function(str)
+                               global_counter = global_counter + 1
+                               return global_counter
+                           end
+                       ]]})
 
-box.internal.sql_create_function("counter1", "INT", counter, -1, false)
-box.internal.sql_create_function("counter2", "INT", counter, -1, true)
+box.schema.func.create('COUNTER2', {language = 'Lua', is_deterministic = true,
+                       param_list = {'any'}, returns = 'integer',
+                       exports = {'SQL', 'LUA'},
+                       body = [[
+                           function(str)
+                                   global_counter = global_counter + 1
+                                   return global_counter
+                               end
+                       ]]})
 
 test:do_execsql_test(
     "func5-2.2",
@@ -256,5 +268,8 @@ test:do_execsql_test(
     [[
         SELECT LEAST(false, 'STR', 1, 0.5);
     ]], { false } )
+
+box.func.COUNTER1:drop()
+box.func.COUNTER2:drop()
 
 test:finish_test()
