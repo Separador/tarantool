@@ -1,7 +1,7 @@
 #!/usr/bin/env tarantool
 
 local test = require('tap').test('log')
-test:plan(3)
+test:plan(4)
 
 local filename = "1.log"
 local message = "Hello, World!"
@@ -25,6 +25,17 @@ log.level(6)
 message = 'updates log level works'
 log.verbose(message)
 test:is(file:read():match('V>%s+(.*)'), message, 'verbose logging')
+
+box.cfg{
+	memtx_memory=107374182
+}
+
+while file:read() do
+end
+
+message = 'calling box.cfg does not reset logging level'
+log.verbose(message)
+test:is(file:read():match('V>%s+(.*)'), message, 'verbose logging after box.cfg')
 
 file:close()
 test:check()
