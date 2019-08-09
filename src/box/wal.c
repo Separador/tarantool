@@ -159,6 +159,8 @@ struct wal_writer
 	struct rlist watchers;
 	/** Wal memory buffer. */
 	struct wal_mem wal_mem;
+	/** Wal memory condition. */
+	struct fiber_cond wal_mem_cond;
 };
 
 enum wal_msg_type {
@@ -1065,6 +1067,7 @@ wal_write_batch(struct wal_writer *writer, struct wal_msg *wal_msg)
 	writer->checkpoint_wal_size += rc;
 	last_committed = stailq_last(&wal_msg->commit);
 	vclock_merge(&writer->vclock, &vclock_diff);
+	fiber_cond_broadcast(&writer->wal_mem_cond);
 
 	/*
 	 * Notify TX if the checkpoint threshold has been exceeded.
@@ -1163,7 +1166,9 @@ wal_cord_f(va_list ap)
 {
 	(void) ap;
 	struct wal_writer *writer = &wal_writer_singleton;
+	fiber_cond_create(&writer->wal_mem_cond);
 	wal_mem_create(&writer->wal_mem);
+	wal_mem_svp(&writer->wal_mem, &writer->vclock);
 
 	/** Initialize eio in this thread */
 	coio_enable();
@@ -1457,7 +1462,8 @@ wal_set_watcher(struct wal_watcher *watcher, const char *name,
 		{ wal_watcher_notify_perform, &watcher->wal_pipe };
 	watcher->route[1] = (struct cmsg_hop)
 		{ wal_watcher_notify_complete, NULL };
-	cbus_pair("wal", name, &watcher->wal_pipe, &watcher->watcher_pipe,
+
+	  cbus_pair("wal", name, &watcher->wal_pipe, &watcher->watcher_pipe,
 		  wal_watcher_attach, watcher, process_cb);
 }
 
@@ -1493,4 +1499,150 @@ wal_atfork()
 		xlog_atfork(&wal_writer_singleton.current_wal);
 	if (xlog_is_open(&vy_log_writer.xlog))
 		xlog_atfork(&vy_log_writer.xlog);
+}
+
+struct wal_relay_msg {
+	struct cmsg base;
+	struct cpipe wal_pipe;
+	struct cpipe relay_pipe;
+
+	struct vclock *vclock;
+	wal_relay_cb on_wal_relay;
+	void *cb_data;
+	struct fiber *fiber;
+	struct cmsg cancel_msg;
+	struct fiber_cond done_cond;
+	bool done;
+	int rc;
+	struct diag diag;
+};
+
+static void
+wal_relay_done(struct cmsg *base)
+{
+	struct wal_relay_msg *msg =
+		container_of(base, struct wal_relay_msg, base);
+	msg->done = true;
+	fiber_cond_signal(&msg->done_cond);
+}
+
+static int
+wal_relay_f(va_list ap)
+{
+	struct wal_writer *writer = &wal_writer_singleton;
+	struct wal_relay_msg *msg = va_arg(ap, struct wal_relay_msg *);
+	struct vclock *vclock = msg->vclock;
+	wal_relay_cb on_wal_relay = msg->on_wal_relay;
+	void *cb_data = msg->cb_data;
+
+	double last_row_time = ev_monotonic_now(loop());
+
+	struct wal_mem_cursor cursor;
+	if (wal_mem_cursor_create(&writer->wal_mem, &cursor, vclock) != 0)
+		goto done;
+	while (!fiber_is_cancelled()) {
+		struct xrow_header *row;
+		void *data;
+		size_t size;
+		int rc = wal_mem_cursor_next(&writer->wal_mem, &cursor,
+					     &row, &data, &size);
+		if (rc < 0) {
+			/* Outdated cursor. */
+			break;
+		}
+		if (rc == 0 && vclock_get(vclock, row->replica_id) >= row->lsn)
+			continue;
+		if (rc > 0) {
+			double timeout = replication_timeout;
+			struct errinj *inj = errinj(ERRINJ_RELAY_REPORT_INTERVAL,
+						    ERRINJ_DOUBLE);
+			if (inj != NULL && inj->dparam != 0)
+				timeout = inj->dparam;
+
+			/*
+			 * Nothing to send so wait for the next row
+			 * and send a hearth beat if timeout exceeded.
+			 */
+			fiber_cond_wait_deadline(&writer->wal_mem_cond,
+						 last_row_time + timeout);
+			if (fiber_is_cancelled())
+				break;
+			if (ev_monotonic_now(loop()) - last_row_time >
+			    timeout) {
+				struct xrow_header hearth_beat;
+				xrow_encode_timestamp(&hearth_beat, instance_id,
+						      ev_now(loop()));
+				row = &hearth_beat;
+			} else
+				continue;
+		}
+		last_row_time = ev_monotonic_now(loop());
+		if (on_wal_relay(row, cb_data) != 0) {
+			diag_move(&fiber()->diag, &msg->diag);
+			break;
+		}
+	}
+	static struct cmsg_hop done_route[] = {
+		{wal_relay_done, NULL}
+	};
+done:
+	cmsg_init(&msg->base, done_route);
+	cpipe_push(&msg->relay_pipe, &msg->base);
+	msg->fiber = NULL;
+	return 0;
+}
+
+static void
+wal_relay_attach(void *data)
+{
+	struct wal_relay_msg *msg = (struct wal_relay_msg *)data;
+	msg->fiber = fiber_new("wal relay fiber", wal_relay_f);
+	fiber_start(msg->fiber, msg);
+}
+
+static void
+wal_relay_cancel(struct cmsg *base)
+{
+	struct wal_relay_msg *msg = container_of(base, struct wal_relay_msg,
+						 cancel_msg);
+	if (msg->fiber != NULL)
+		fiber_cancel(msg->fiber);
+}
+
+int
+wal_relay(struct vclock *vclock, wal_relay_cb on_wal_relay, void *cb_data,
+	  const char *endpoint_name)
+{
+	struct wal_relay_msg wal_relay_msg;
+	wal_relay_msg.vclock = vclock;
+	wal_relay_msg.on_wal_relay = on_wal_relay;
+	wal_relay_msg.cb_data = cb_data;
+	diag_create(&wal_relay_msg.diag);
+	wal_relay_msg.cancel_msg.route = NULL;
+
+	fiber_cond_create(&wal_relay_msg.done_cond);
+	wal_relay_msg.done = false;
+
+	cbus_pair("wal", endpoint_name, &wal_relay_msg.wal_pipe,
+		  &wal_relay_msg.relay_pipe,
+		  wal_relay_attach, &wal_relay_msg, cbus_process);
+
+	while (!wal_relay_msg.done) {
+		if (fiber_is_cancelled() &&
+		    wal_relay_msg.cancel_msg.route == NULL) {
+			static struct cmsg_hop cancel_route[]= {
+				{wal_relay_cancel, NULL}};
+			cmsg_init(&wal_relay_msg.cancel_msg, cancel_route);
+			cpipe_push(&wal_relay_msg.wal_pipe, &wal_relay_msg.cancel_msg);
+		}
+		fiber_cond_wait(&wal_relay_msg.done_cond);
+	}
+
+	cbus_unpair(&wal_relay_msg.wal_pipe, &wal_relay_msg.relay_pipe,
+		    NULL, NULL, cbus_process);
+	if (!diag_is_empty(&wal_relay_msg.diag)) {
+		diag_move(&wal_relay_msg.diag, &fiber()->diag);
+		return -1;
+	}
+	return 0;
 }

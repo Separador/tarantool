@@ -247,14 +247,13 @@ wal_mem_cursor_next(struct wal_mem *wal_mem,
 	}
 
 	struct wal_mem_buf *mem_buf;
-	size_t last_row_index;
 
 next_buffer:
 	mem_buf = wal_mem->buf +
-		  wal_mem->last_buf_index % WAL_MEM_BUF_COUNT;
-	last_row_index = ibuf_used(&mem_buf->rows) /
-			 sizeof(struct wal_mem_buf_row);
-	if (last_row_index == wal_mem_cursor->row_index) {
+		  wal_mem_cursor->buf_index % WAL_MEM_BUF_COUNT;
+	size_t buf_row_count = ibuf_used(&mem_buf->rows) /
+			       sizeof(struct wal_mem_buf_row);
+	if (buf_row_count == wal_mem_cursor->row_index) {
 		/* No more rows in the current buffer. */
 		if (wal_mem->last_buf_index == wal_mem_cursor->buf_index)
 			/* No more rows in the memory. */
@@ -269,5 +268,6 @@ next_buffer:
 	*row = &buf_row->xrow;
 	*data = buf_row->data;
 	*size = buf_row->size;
+	++wal_mem_cursor->row_index;
 	return 0;
 }

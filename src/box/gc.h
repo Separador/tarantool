@@ -125,6 +125,8 @@ struct gc_state {
 	/** True if log is opened. */
 	bool log_opened;
 	/** Registered consumers, linked by gc_consumer::node. */
+	/** xdir to track wal files. */
+	struct xdir xdir;
 	gc_tree_t consumers;
 	/** Fiber responsible for periodic checkpointing. */
 	struct fiber *checkpoint_fiber;

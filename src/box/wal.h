@@ -235,6 +235,12 @@ wal_write_vy_log(struct journal_entry *req);
 void
 wal_rotate_vy_log();
 
+typedef int (*wal_relay_cb)(struct xrow_header *header, void *data);
+
+int
+wal_relay(struct vclock *vclock, wal_relay_cb on_wal_relay, void *cb_data,
+	  const char *endpoint_name);
+
 #if defined(__cplusplus)
 } /* extern "C" */
 #endif /* defined(__cplusplus) */

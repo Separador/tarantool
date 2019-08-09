@@ -126,6 +126,8 @@ gc_init(const char *wal_dir_name)
 	xdir_scan(&gc.wal_dir);
 	gc.log_opened = false;
 	gc_tree_new(&gc.consumers);
+	xdir_create(&gc.xdir, wal_dir_name, XLOG, &INSTANCE_UUID,
+		    &xlog_opts_default);
 	fiber_cond_create(&gc.cleanup_cond);
 	checkpoint_schedule_cfg(&gc.checkpoint_schedule, 0, 0);
 
@@ -166,6 +168,7 @@ gc_free(void)
 		gc_consumer_delete(consumer);
 		consumer = next;
 	}
+	xdir_destroy(&gc.xdir);
 }
 
 /**
