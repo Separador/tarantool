@@ -41,11 +41,13 @@
 
 #include "coio.h"
 #include "coio_task.h"
-#include "engine.h"
 #include "gc.h"
+#include "index.h"
 #include "iproto_constants.h"
 #include "recovery.h"
 #include "replication.h"
+#include "schema.h"
+#include "space.h"
 #include "trigger.h"
 #include "vclock.h"
 #include "version.h"
@@ -168,8 +170,6 @@ relay_last_row_time(const struct relay *relay)
 static void
 relay_send(struct relay *relay, struct xrow_header *packet);
 static void
-relay_send_initial_join_row(struct xstream *stream, struct xrow_header *row);
-static void
 relay_send_row(struct xstream *stream, struct xrow_header *row);
 
 struct relay *
@@ -285,20 +285,156 @@ relay_set_cord_name(int fd)
 	cord_set_name(name);
 }
 
+/**
+ * A space to feed to a replica on initial join.
+ */
+struct relay_space {
+	/** Link in the list of spaces to feed. */
+	struct rlist link;
+	/** Space id. */
+	uint32_t space_id;
+	/** Read view iterator. */
+	struct snapshot_iterator *iterator;
+};
+
+/**
+ * Add a space to the list of spaces to feed to a replica
+ * if eligible. We don't need to relay the following kinds
+ * of spaces:
+ *
+ *  - Temporary spaces, apparently.
+ *  - Spaces that are local to this instance.
+ *  - Virtual spaces, such as sysview.
+ *  - Spaces that don't have the primary index.
+ */
+static int
+relay_space_add(struct space *sp, void *data)
+{
+	struct rlist *spaces = (struct rlist *)data;
+
+	if (space_is_temporary(sp))
+		return 0;
+	if (space_group_id(sp) == GROUP_LOCAL)
+		return 0;
+	if (sp->engine->flags & ENGINE_EXCLUDE_FROM_SNAPSHOT)
+		return 0;
+	struct index *pk = space_index(sp, 0);
+	if (pk == NULL)
+		return 0;
+
+	struct relay_space *r = (struct relay_space *)malloc(sizeof(*r));
+	if (r == NULL) {
+		diag_set(OutOfMemory, sizeof(*r),
+			 "malloc", "struct relay_space");
+		return -1;
+	}
+	r->space_id = space_id(sp);
+	r->iterator = index_create_snapshot_iterator(pk);
+	if (r->iterator == NULL) {
+		free(r);
+		return -1;
+	}
+	rlist_add_tail_entry(spaces, r, link);
+	return 0;
+}
+
+/**
+ * Relay a single space row to a replica.
+ */
+static void
+relay_space_send_row(uint32_t space_id, const char *data, uint32_t size,
+		     struct ev_io *io, uint64_t sync)
+{
+	struct request_replace_body body;
+	request_replace_body_create(&body, space_id);
+
+	struct xrow_header row;
+	memset(&row, 0, sizeof(row));
+	row.type = IPROTO_INSERT;
+	row.sync = sync;
+
+	row.bodycnt = 2;
+	row.body[0].iov_base = &body;
+	row.body[0].iov_len = sizeof(body);
+	row.body[1].iov_base = (char *)data;
+	row.body[1].iov_len = size;
+
+	coio_write_xrow(io, &row);
+}
+
+/**
+ * Relay a read view of a space content to a replica.
+ */
+static void
+relay_space_send(struct relay_space *r, struct ev_io *io, uint64_t sync)
+{
+	int rc;
+	struct snapshot_iterator *it = r->iterator;
+
+	uint32_t size;
+	const char *data;
+	while ((rc = it->next(it, &data, &size)) == 0 && data != NULL)
+		relay_space_send_row(r->space_id, data, size, io, sync);
+
+	if (rc != 0)
+		diag_raise();
+}
+
+/**
+ * Close the read view iterator associated with the space
+ * and free the container object.
+ */
+static void
+relay_space_free(struct relay_space *r)
+{
+	rlist_del_entry(r, link);
+	r->iterator->free(r->iterator);
+	free(r);
+}
+
 void
 relay_initial_join(int fd, uint64_t sync, struct vclock *vclock)
 {
-	struct relay *relay = relay_new(NULL);
-	if (relay == NULL)
-		diag_raise();
+	struct ev_io io;
+	coio_create(&io, fd);
 
-	relay_start(relay, fd, sync, relay_send_initial_join_row);
-	auto relay_guard = make_scoped_guard([=] {
-		relay_stop(relay);
-		relay_delete(relay);
+	RLIST_HEAD(spaces);
+	auto guard = make_scoped_guard([&spaces] {
+		struct relay_space *r, *next;
+		rlist_foreach_entry_safe(r, &spaces, link, next)
+			relay_space_free(r);
 	});
 
-	engine_join_xc(vclock, &relay->stream);
+	/*
+	 * First, we open read view iterators over spaces that need
+	 * to be fed to the replica. Note, we can't yield in the loop,
+	 * because otherwise we could get an inconsistent view of the
+	 * database.
+	 */
+	if (space_foreach(relay_space_add, &spaces) != 0)
+		diag_raise();
+
+	/*
+	 * Second, we must sync WAL to make sure that all changes
+	 * visible by the iterators are successfully committed.
+	 */
+	if (wal_sync() != 0)
+		diag_raise();
+
+	vclock_copy(vclock, &replicaset.vclock);
+
+	/* Respond to JOIN request with the current vclock. */
+	struct xrow_header row;
+	xrow_encode_vclock_xc(&row, vclock);
+	row.sync = sync;
+	coio_write_xrow(&io, &row);
+
+	/* Finally, send the read view to the replica. */
+	struct relay_space *r, *next;
+	rlist_foreach_entry_safe(r, &spaces, link, next) {
+		relay_space_send(r, &io, sync);
+		relay_space_free(r);
+	}
 }
 
 int
@@ -697,18 +833,6 @@ relay_send(struct relay *relay, struct xrow_header *packet)
 	struct errinj *inj = errinj(ERRINJ_RELAY_TIMEOUT, ERRINJ_DOUBLE);
 	if (inj != NULL && inj->dparam > 0)
 		fiber_sleep(inj->dparam);
-}
-
-static void
-relay_send_initial_join_row(struct xstream *stream, struct xrow_header *row)
-{
-	struct relay *relay = container_of(stream, struct relay, stream);
-	/*
-	 * Ignore replica local requests as we don't need to promote
-	 * vclock while sending a snapshot.
-	 */
-	if (row->group_id != GROUP_LOCAL)
-		relay_send(relay, row);
 }
 
 /** Send a single row to the client. */

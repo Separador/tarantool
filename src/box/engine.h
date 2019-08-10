@@ -74,11 +74,6 @@ struct engine_vtab {
 	struct space *(*create_space)(struct engine *engine,
 			struct space_def *def, struct rlist *key_list);
 	/**
-	 * Write statements stored in checkpoint @vclock to @stream.
-	 */
-	int (*join)(struct engine *engine, const struct vclock *vclock,
-		    struct xstream *stream);
-	/**
 	 * Begin a new single or multi-statement transaction.
 	 * Called on first statement in a transaction, not when
 	 * a user said begin(). Effectively it means that
@@ -205,6 +200,12 @@ enum {
 	 * transactions w/o throwing ER_CROSS_ENGINE_TRANSACTION.
 	 */
 	ENGINE_BYPASS_TX = 1 << 0,
+	/**
+	 * This flag is set for virtual engines, such as sysview,
+	 * that don't actually store any data. It means that we
+	 * must not relay their content to a newly joined replica.
+	 */
+	ENGINE_EXCLUDE_FROM_SNAPSHOT = 1 << 1,
 };
 
 struct engine {
@@ -330,13 +331,6 @@ engine_begin_final_recovery(void);
 int
 engine_end_recovery(void);
 
-/**
- * Feed checkpoint data as join events to the replicas.
- * (called on the master).
- */
-int
-engine_join(const struct vclock *vclock, struct xstream *stream);
-
 int
 engine_begin_checkpoint(void);
 
@@ -364,8 +358,6 @@ engine_reset_stat(void);
 /*
  * Virtual method stubs.
  */
-int generic_engine_join(struct engine *, const struct vclock *,
-			struct xstream *);
 int generic_engine_begin(struct engine *, struct txn *);
 int generic_engine_begin_statement(struct engine *, struct txn *);
 int generic_engine_prepare(struct engine *, struct txn *);
@@ -465,13 +457,6 @@ static inline void
 engine_end_recovery_xc(void)
 {
 	if (engine_end_recovery() != 0)
-		diag_raise();
-}
-
-static inline void
-engine_join_xc(const struct vclock *vclock, struct xstream *stream)
-{
-	if (engine_join(vclock, stream) != 0)
 		diag_raise();
 }
 

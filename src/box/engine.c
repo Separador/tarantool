@@ -174,17 +174,6 @@ engine_backup(const struct vclock *vclock, engine_backup_cb cb, void *cb_arg)
 	return 0;
 }
 
-int
-engine_join(const struct vclock *vclock, struct xstream *stream)
-{
-	struct engine *engine;
-	engine_foreach(engine) {
-		if (engine->vtab->join(engine, vclock, stream) != 0)
-			return -1;
-	}
-	return 0;
-}
-
 void
 engine_memory_stat(struct engine_memory_stat *stat)
 {
@@ -203,16 +192,6 @@ engine_reset_stat(void)
 }
 
 /* {{{ Virtual method stubs */
-
-int
-generic_engine_join(struct engine *engine, const struct vclock *vclock,
-		    struct xstream *stream)
-{
-	(void)engine;
-	(void)vclock;
-	(void)stream;
-	return 0;
-}
 
 int
 generic_engine_begin(struct engine *engine, struct txn *txn)

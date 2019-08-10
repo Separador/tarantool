@@ -734,79 +734,6 @@ memtx_engine_backup(struct engine *engine, const struct vclock *vclock,
 	return cb(filename, cb_arg);
 }
 
-/** Used to pass arguments to memtx_initial_join_f */
-struct memtx_join_arg {
-	const char *snap_dirname;
-	int64_t checkpoint_lsn;
-	struct xstream *stream;
-};
-
-/**
- * Invoked from a thread to feed snapshot rows.
- */
-static int
-memtx_initial_join_f(va_list ap)
-{
-	struct memtx_join_arg *arg = va_arg(ap, struct memtx_join_arg *);
-	const char *snap_dirname = arg->snap_dirname;
-	int64_t checkpoint_lsn = arg->checkpoint_lsn;
-	struct xstream *stream = arg->stream;
-
-	struct xdir dir;
-	/*
-	 * snap_dirname and INSTANCE_UUID don't change after start,
-	 * safe to use in another thread.
-	 */
-	xdir_create(&dir, snap_dirname, SNAP, &INSTANCE_UUID,
-		    &xlog_opts_default);
-	struct xlog_cursor cursor;
-	int rc = xdir_open_cursor(&dir, checkpoint_lsn, &cursor);
-	xdir_destroy(&dir);
-	if (rc < 0)
-		return -1;
-
-	struct xrow_header row;
-	while ((rc = xlog_cursor_next(&cursor, &row, true)) == 0) {
-		rc = xstream_write(stream, &row);
-		if (rc < 0)
-			break;
-	}
-	xlog_cursor_close(&cursor, false);
-	if (rc < 0)
-		return -1;
-
-	/**
-	 * We should never try to read snapshots with no EOF
-	 * marker - such snapshots are very likely corrupted and
-	 * should not be trusted.
-	 */
-	/* TODO: replace panic with diag_set() */
-	if (!xlog_cursor_is_eof(&cursor))
-		panic("snapshot `%s' has no EOF marker", cursor.name);
-	return 0;
-}
-
-static int
-memtx_engine_join(struct engine *engine, const struct vclock *vclock,
-		  struct xstream *stream)
-{
-	struct memtx_engine *memtx = (struct memtx_engine *)engine;
-
-	/*
-	 * cord_costart() passes only void * pointer as an argument.
-	 */
-	struct memtx_join_arg arg = {
-		/* .snap_dirname   = */ memtx->snap_dir.dirname,
-		/* .checkpoint_lsn = */ vclock_sum(vclock),
-		/* .stream         = */ stream
-	};
-
-	/* Send snapshot using a thread */
-	struct cord cord;
-	cord_costart(&cord, "initial_join", memtx_initial_join_f, &arg);
-	return cord_cojoin(&cord);
-}
-
 static int
 small_stats_noop_cb(const struct mempool_stats *stats, void *cb_ctx)
 {
@@ -830,7 +757,6 @@ memtx_engine_memory_stat(struct engine *engine, struct engine_memory_stat *stat)
 static const struct engine_vtab memtx_engine_vtab = {
 	/* .shutdown = */ memtx_engine_shutdown,
 	/* .create_space = */ memtx_engine_create_space,
-	/* .join = */ memtx_engine_join,
 	/* .begin = */ memtx_engine_begin,
 	/* .begin_statement = */ generic_engine_begin_statement,
 	/* .prepare = */ generic_engine_prepare,

@@ -1467,41 +1467,13 @@ box_process_join(struct ev_io *io, struct xrow_header *header)
 			  "wal_mode = 'none'");
 	}
 
-	/*
-	 * The only case when the directory index is empty is
-	 * when someone has deleted a snapshot and tries to join
-	 * as a replica. Our best effort is to not crash in such
-	 * case: raise ER_MISSING_SNAPSHOT.
-	 */
-	struct gc_checkpoint *checkpoint = gc_last_checkpoint();
-	if (checkpoint == NULL)
-		tnt_raise(ClientError, ER_MISSING_SNAPSHOT);
-
-	/* Remember start vclock. */
-	struct vclock start_vclock;
-	vclock_copy(&start_vclock, &checkpoint->vclock);
-
-	/*
-	 * Make sure the checkpoint files won't be deleted while
-	 * initial join is in progress.
-	 */
-	struct gc_checkpoint_ref gc;
-	gc_ref_checkpoint(checkpoint, &gc, "replica %s",
-			  tt_uuid_str(&instance_uuid));
-	auto gc_guard = make_scoped_guard([&]{ gc_unref_checkpoint(&gc); });
-
-	/* Respond to JOIN request with start_vclock. */
-	struct xrow_header row;
-	xrow_encode_vclock_xc(&row, &start_vclock);
-	row.sync = header->sync;
-	coio_write_xrow(io, &row);
-
 	say_info("joining replica %s at %s",
 		 tt_uuid_str(&instance_uuid), sio_socketname(io->fd));
 
 	/*
 	 * Initial stream: feed replica with dirty data from engines.
 	 */
+	struct vclock start_vclock;
 	relay_initial_join(io->fd, header->sync, &start_vclock);
 	say_info("initial data sent.");
 
@@ -1512,6 +1484,8 @@ box_process_join(struct ev_io *io, struct xrow_header *header)
 	 * client.
 	 */
 	box_on_join(&instance_uuid);
+
+	ERROR_INJECT_YIELD(ERRINJ_REPLICA_JOIN_DELAY);
 
 	/* Remember master's vclock after the last request */
 	struct vclock stop_vclock;
@@ -1530,6 +1504,7 @@ box_process_join(struct ev_io *io, struct xrow_header *header)
 		diag_raise();
 
 	/* Send end of initial stage data marker */
+	struct xrow_header row;
 	xrow_encode_vclock_xc(&row, &stop_vclock);
 	row.sync = header->sync;
 	coio_write_xrow(io, &row);

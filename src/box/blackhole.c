@@ -177,7 +177,6 @@ blackhole_engine_create_space(struct engine *engine, struct space_def *def,
 static const struct engine_vtab blackhole_engine_vtab = {
 	/* .shutdown = */ blackhole_engine_shutdown,
 	/* .create_space = */ blackhole_engine_create_space,
-	/* .join = */ generic_engine_join,
 	/* .begin = */ generic_engine_begin,
 	/* .begin_statement = */ generic_engine_begin_statement,
 	/* .prepare = */ generic_engine_prepare,
@@ -212,6 +211,6 @@ blackhole_engine_new(void)
 
 	engine->vtab = &blackhole_engine_vtab;
 	engine->name = "blackhole";
-	engine->flags = ENGINE_BYPASS_TX;
+	engine->flags = ENGINE_BYPASS_TX | ENGINE_EXCLUDE_FROM_SNAPSHOT;
 	return engine;
 }

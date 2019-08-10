@@ -565,7 +565,6 @@ sysview_engine_create_space(struct engine *engine, struct space_def *def,
 static const struct engine_vtab sysview_engine_vtab = {
 	/* .shutdown = */ sysview_engine_shutdown,
 	/* .create_space = */ sysview_engine_create_space,
-	/* .join = */ generic_engine_join,
 	/* .begin = */ generic_engine_begin,
 	/* .begin_statement = */ generic_engine_begin_statement,
 	/* .prepare = */ generic_engine_prepare,
@@ -600,6 +599,6 @@ sysview_engine_new(void)
 
 	sysview->base.vtab = &sysview_engine_vtab;
 	sysview->base.name = "sysview";
-	sysview->base.flags = ENGINE_BYPASS_TX;
+	sysview->base.flags = ENGINE_BYPASS_TX | ENGINE_EXCLUDE_FROM_SNAPSHOT;
 	return sysview;
 }
