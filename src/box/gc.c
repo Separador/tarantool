@@ -66,6 +66,17 @@ gc_cleanup_fiber_f(va_list);
 static int
 gc_checkpoint_fiber_f(va_list);
 
+/*
+ * A shortcut function which checks if one vclock equal
+ * or greather than another.
+ */
+static inline bool
+gc_vclock_ge(const struct vclock *first, const struct vclock *second)
+{
+	int cmp = vclock_compare(first, second);
+	return (cmp == 0) || (cmp == 1);
+}
+
 /**
  * Comparator used for ordering gc_consumer objects by signature
  * in a binary tree.
@@ -201,8 +212,7 @@ gc_run_cleanup(void)
 	if (vclock == NULL ||
 	    vclock_sum(vclock) > vclock_sum(&checkpoint->vclock))
 		vclock = &checkpoint->vclock;
-	int cmp = vclock_compare(vclock, &replicaset.vclock);
-	if (gc.log_opened || !(cmp == 0 || cmp == 1))
+	if (gc.log_opened || !gc_vclock_ge(vclock, &replicaset.vclock))
 		vclock = vclockset_psearch(&gc.wal_dir.index, vclock);
 	run_wal_gc = vclock != NULL;
 
@@ -558,9 +568,23 @@ gc_consumer_register(const struct vclock *vclock, const char *format, ...)
 	va_start(ap, format);
 	vsnprintf(consumer->name, GC_NAME_MAX, format, ap);
 	va_end(ap);
-
-	vclock_copy(&consumer->vclock, vclock);
-	gc_tree_insert(&gc.consumers, consumer);
+	/* Found vclock of a wal file which contains a vclock from relay. */
+	struct vclock *track_vclock = vclockset_psearch(&gc.wal_dir.index,
+							vclock);
+	if (track_vclock == NULL && !gc.log_opened &&
+	    gc_vclock_ge(vclock, &replicaset.vclock))  {
+		/*
+		 * There is no wal file in index containing the vclock
+		 * which is possible when a consumer is up to date with
+		 * the last checkpoint and there were no subsequent writes.
+		 */
+		track_vclock = &replicaset.vclock;
+	}
+	if (vclock != NULL) {
+		vclock_copy(&consumer->vclock, track_vclock);
+		gc_tree_insert(&gc.consumers, consumer);
+	} else
+		consumer->is_inactive = true;
 	return consumer;
 }
 
@@ -580,20 +604,30 @@ gc_consumer_advance(struct gc_consumer *consumer, const struct vclock *vclock)
 	if (consumer->is_inactive)
 		return;
 
-	int64_t signature = vclock_sum(vclock);
-	int64_t prev_signature = vclock_sum(&consumer->vclock);
+	/*
+	 * In some rare cases relay could downgrade vclock, for instance in
+	 * case of replica data loss, and there is nothing we could do.
+	 */
+	if (!gc_vclock_ge(vclock, &consumer->vclock))
+		return;
 
-	assert(signature >= prev_signature);
-	if (signature == prev_signature)
-		return; /* nothing to do */
-
+	/* Detect which wal file contains ack-ed relay position. */
+	if (!gc.log_opened && gc_vclock_ge(vclock, &replicaset.vclock)) {
+		/*
+		 * Relay is up to date with this instance and there is no
+		 * wal file (and no writes) after the last checkpoint.
+		 */
+		vclock = &replicaset.vclock;
+	} else
+		vclock = vclockset_psearch(&gc.wal_dir.index, vclock);
+	assert(vclock != NULL);
 	/*
 	 * Do not update the tree unless the tree invariant
 	 * is violated.
 	 */
 	struct gc_consumer *next = gc_tree_next(&gc.consumers, consumer);
 	bool update_tree = (next != NULL &&
-			    signature >= vclock_sum(&next->vclock));
+			    vclock_sum(vclock) >= vclock_sum(&next->vclock));
 
 	if (update_tree)
 		gc_tree_remove(&gc.consumers, consumer);
