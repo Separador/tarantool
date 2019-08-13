@@ -56,8 +56,6 @@ struct recovery {
 	 * them locally.
 	 */
 	struct fiber *watcher;
-	/** List of triggers invoked when the current WAL is closed. */
-	struct rlist on_close_log;
 };
 
 struct recovery *
