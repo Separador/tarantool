@@ -724,9 +724,6 @@ wal_set_checkpoint_threshold(int64_t threshold)
 	fiber_set_cancellable(cancellable);
 }
 
-static void
-wal_notify_watchers(struct wal_writer *writer, unsigned events);
-
 /**
  * If there is no current WAL, try to open it, and close the
  * previous WAL. We close the previous WAL only after opening
@@ -771,7 +768,6 @@ wal_opt_rotate(struct wal_writer *writer)
 	vclock_copy(&writer->prev_vclock, &writer->vclock);
 
 	wal_notify_log_action(writer, WAL_LOG_OPEN);
-	wal_notify_watchers(writer, WAL_EVENT_ROTATE);
 	return 0;
 }
 
@@ -1123,7 +1119,6 @@ done:
 		wal_writer_begin_rollback(writer);
 	}
 	fiber_gc();
-	wal_notify_watchers(writer, WAL_EVENT_WRITE);
 }
 
 /*
@@ -1363,128 +1358,6 @@ wal_rotate_vy_log()
 		  wal_rotate_vy_log_f, NULL, TIMEOUT_INFINITY);
 	fiber_set_cancellable(cancellable);
 }
-
-static void
-wal_watcher_notify(struct wal_watcher *watcher, unsigned events)
-{
-	assert(!rlist_empty(&watcher->next));
-
-	struct wal_watcher_msg *msg = &watcher->msg;
-	if (msg->cmsg.route != NULL) {
-		/*
-		 * If the notification message is still en route,
-		 * mark the watcher to resend it as soon as it
-		 * returns to WAL so as not to lose any events.
-		 */
-		watcher->pending_events |= events;
-		return;
-	}
-
-	msg->events = events;
-	cmsg_init(&msg->cmsg, watcher->route);
-	cpipe_push(&watcher->watcher_pipe, &msg->cmsg);
-}
-
-static void
-wal_watcher_notify_perform(struct cmsg *cmsg)
-{
-	struct wal_watcher_msg *msg = (struct wal_watcher_msg *) cmsg;
-	struct wal_watcher *watcher = msg->watcher;
-	unsigned events = msg->events;
-
-	watcher->cb(watcher, events);
-}
-
-static void
-wal_watcher_notify_complete(struct cmsg *cmsg)
-{
-	struct wal_watcher_msg *msg = (struct wal_watcher_msg *) cmsg;
-	struct wal_watcher *watcher = msg->watcher;
-
-	cmsg->route = NULL;
-
-	if (rlist_empty(&watcher->next)) {
-		/* The watcher is about to be destroyed. */
-		return;
-	}
-
-	if (watcher->pending_events != 0) {
-		/*
-		 * Resend the message if we got notified while
-		 * it was en route, see wal_watcher_notify().
-		 */
-		wal_watcher_notify(watcher, watcher->pending_events);
-		watcher->pending_events = 0;
-	}
-}
-
-static void
-wal_watcher_attach(void *arg)
-{
-	struct wal_watcher *watcher = (struct wal_watcher *) arg;
-	struct wal_writer *writer = &wal_writer_singleton;
-
-	assert(rlist_empty(&watcher->next));
-	rlist_add_tail_entry(&writer->watchers, watcher, next);
-
-	/*
-	 * Notify the watcher right after registering it
-	 * so that it can process existing WALs.
-	 */
-	wal_watcher_notify(watcher, WAL_EVENT_ROTATE);
-}
-
-static void
-wal_watcher_detach(void *arg)
-{
-	struct wal_watcher *watcher = (struct wal_watcher *) arg;
-
-	assert(!rlist_empty(&watcher->next));
-	rlist_del_entry(watcher, next);
-}
-
-void
-wal_set_watcher(struct wal_watcher *watcher, const char *name,
-		void (*watcher_cb)(struct wal_watcher *, unsigned events),
-		void (*process_cb)(struct cbus_endpoint *))
-{
-	assert(journal_is_initialized(&wal_writer_singleton.base));
-
-	rlist_create(&watcher->next);
-	watcher->cb = watcher_cb;
-	watcher->msg.watcher = watcher;
-	watcher->msg.events = 0;
-	watcher->msg.cmsg.route = NULL;
-	watcher->pending_events = 0;
-
-	assert(lengthof(watcher->route) == 2);
-	watcher->route[0] = (struct cmsg_hop)
-		{ wal_watcher_notify_perform, &watcher->wal_pipe };
-	watcher->route[1] = (struct cmsg_hop)
-		{ wal_watcher_notify_complete, NULL };
-
-	  cbus_pair("wal", name, &watcher->wal_pipe, &watcher->watcher_pipe,
-		  wal_watcher_attach, watcher, process_cb);
-}
-
-void
-wal_clear_watcher(struct wal_watcher *watcher,
-		  void (*process_cb)(struct cbus_endpoint *))
-{
-	assert(journal_is_initialized(&wal_writer_singleton.base));
-
-	cbus_unpair(&watcher->wal_pipe, &watcher->watcher_pipe,
-		    wal_watcher_detach, watcher, process_cb);
-}
-
-static void
-wal_notify_watchers(struct wal_writer *writer, unsigned events)
-{
-	struct wal_watcher *watcher;
-	rlist_foreach_entry(watcher, &writer->watchers, next)
-		wal_watcher_notify(watcher, events);
-}
-
 
 /**
  * After fork, the WAL writer thread disappears.

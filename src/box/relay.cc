@@ -82,8 +82,6 @@ struct relay {
 	struct vclock stop_vclock;
 	/** Remote replica */
 	struct replica *replica;
-	/** WAL event watcher. */
-	struct wal_watcher wal_watcher;
 	/** Relay diagnostics. */
 	struct diag diag;
 	/** Vclock recieved from replica. */
