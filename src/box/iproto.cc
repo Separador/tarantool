@@ -287,18 +287,9 @@ tx_process_destroy(struct cmsg *m);
 static void
 net_finish_destroy(struct cmsg *m);
 
-static const struct cmsg_hop destroy_route[] = {
-	{ tx_process_destroy, &net_pipe },
-	{ net_finish_destroy, NULL },
-};
-
 /** Fire on_disconnect triggers in the tx thread. */
 static void
 tx_process_disconnect(struct cmsg *m);
-
-static const struct cmsg_hop disconnect_route[] = {
-	{ tx_process_disconnect, NULL }
-};
 
 /**
  * Kharon is in the dead world (iproto). Schedule an event to
@@ -316,12 +307,6 @@ iproto_process_push(struct cmsg *m);
  */
 static void
 tx_end_push(struct cmsg *m);
-
-static const struct cmsg_hop push_route[] = {
-	{ iproto_process_push, &tx_pipe },
-	{ tx_end_push, NULL }
-};
-
 
 /* }}} */
 
@@ -1046,8 +1031,8 @@ iproto_connection_new(int fd)
 	con->session = NULL;
 	rlist_create(&con->in_stop_list);
 	/* It may be very awkward to allocate at close. */
-	cmsg_init(&con->destroy_msg, destroy_route);
-	cmsg_init(&con->disconnect_msg, disconnect_route);
+	cmsg_init(&con->destroy_msg, tx_process_destroy);
+	cmsg_init(&con->disconnect_msg, tx_process_disconnect);
 	con->is_destroy_sent = false;
 	con->tx.is_push_pending = false;
 	con->tx.is_push_sent = false;
@@ -1116,60 +1101,20 @@ net_end_join(struct cmsg *msg);
 static void
 net_end_subscribe(struct cmsg *msg);
 
-static const struct cmsg_hop misc_route[] = {
-	{ tx_process_misc, &net_pipe },
-	{ net_send_msg, NULL },
-};
-
-static const struct cmsg_hop call_route[] = {
-	{ tx_process_call, &net_pipe },
-	{ net_send_msg, NULL },
-};
-
-static const struct cmsg_hop select_route[] = {
-	{ tx_process_select, &net_pipe },
-	{ net_send_msg, NULL },
-};
-
-static const struct cmsg_hop process1_route[] = {
-	{ tx_process1, &net_pipe },
-	{ net_send_msg, NULL },
-};
-
-static const struct cmsg_hop sql_route[] = {
-	{ tx_process_sql, &net_pipe },
-	{ net_send_msg, NULL },
-};
-
-static const struct cmsg_hop *dml_route[IPROTO_TYPE_STAT_MAX] = {
+static const cmsg_f dml_route[IPROTO_TYPE_STAT_MAX] = {
 	NULL,                                   /* IPROTO_OK */
-	select_route,                           /* IPROTO_SELECT */
-	process1_route,                         /* IPROTO_INSERT */
-	process1_route,                         /* IPROTO_REPLACE */
-	process1_route,                         /* IPROTO_UPDATE */
-	process1_route,                         /* IPROTO_DELETE */
-	call_route,                             /* IPROTO_CALL_16 */
-	misc_route,                             /* IPROTO_AUTH */
-	call_route,                             /* IPROTO_EVAL */
-	process1_route,                         /* IPROTO_UPSERT */
-	call_route,                             /* IPROTO_CALL */
-	sql_route,                              /* IPROTO_EXECUTE */
+	tx_process_select,                      /* IPROTO_SELECT */
+	tx_process1,                            /* IPROTO_INSERT */
+	tx_process1,                            /* IPROTO_REPLACE */
+	tx_process1,                            /* IPROTO_UPDATE */
+	tx_process1,                            /* IPROTO_DELETE */
+	tx_process_call,                        /* IPROTO_CALL_16 */
+	tx_process_misc,                        /* IPROTO_AUTH */
+	tx_process_call,                        /* IPROTO_EVAL */
+	tx_process1,                            /* IPROTO_UPSERT */
+	tx_process_call,                        /* IPROTO_CALL */
+	tx_process_sql,                              /* IPROTO_EXECUTE */
 	NULL,                                   /* IPROTO_NOP */
-};
-
-static const struct cmsg_hop join_route[] = {
-	{ tx_process_join_subscribe, &net_pipe },
-	{ net_end_join, NULL },
-};
-
-static const struct cmsg_hop subscribe_route[] = {
-	{ tx_process_join_subscribe, &net_pipe },
-	{ net_end_subscribe, NULL },
-};
-
-static const struct cmsg_hop error_route[] = {
-	{ tx_reply_iproto_error, &net_pipe },
-	{ net_send_error, NULL },
 };
 
 static void
@@ -1207,32 +1152,32 @@ iproto_msg_decode(struct iproto_msg *msg, const char **pos, const char *reqend,
 	case IPROTO_EVAL:
 		if (xrow_decode_call(&msg->header, &msg->call))
 			goto error;
-		cmsg_init(&msg->base, call_route);
+		cmsg_init(&msg->base, tx_process_call);
 		break;
 	case IPROTO_EXECUTE:
 		if (xrow_decode_sql(&msg->header, &msg->sql) != 0)
 			goto error;
-		cmsg_init(&msg->base, sql_route);
+		cmsg_init(&msg->base, tx_process_sql);
 		break;
 	case IPROTO_PING:
-		cmsg_init(&msg->base, misc_route);
+		cmsg_init(&msg->base, tx_process_misc);
 		break;
 	case IPROTO_JOIN:
-		cmsg_init(&msg->base, join_route);
+		cmsg_init(&msg->base, tx_process_join_subscribe);
 		*stop_input = true;
 		break;
 	case IPROTO_SUBSCRIBE:
-		cmsg_init(&msg->base, subscribe_route);
+		cmsg_init(&msg->base, tx_process_join_subscribe);
 		*stop_input = true;
 		break;
 	case IPROTO_VOTE_DEPRECATED:
 	case IPROTO_VOTE:
-		cmsg_init(&msg->base, misc_route);
+		cmsg_init(&msg->base, tx_process_misc);
 		break;
 	case IPROTO_AUTH:
 		if (xrow_decode_auth(&msg->header, &msg->auth))
 			goto error;
-		cmsg_init(&msg->base, misc_route);
+		cmsg_init(&msg->base, tx_process_misc);
 		break;
 	default:
 		diag_set(ClientError, ER_UNKNOWN_REQUEST_TYPE,
@@ -1245,7 +1190,7 @@ error:
 	diag_log();
 	diag_create(&msg->diag);
 	diag_move(&fiber()->diag, &msg->diag);
-	cmsg_init(&msg->base, error_route);
+	cmsg_init(&msg->base, tx_reply_iproto_error);
 }
 
 static void
@@ -1300,6 +1245,8 @@ tx_process_destroy(struct cmsg *m)
 	 */
 	obuf_destroy(&con->obuf[0]);
 	obuf_destroy(&con->obuf[1]);
+	cmsg_init(m, net_finish_destroy);
+	cpipe_push(&net_pipe, m);
 }
 
 /**
@@ -1344,10 +1291,7 @@ net_discard_input(struct cmsg *m)
 static void
 tx_discard_input(struct iproto_msg *msg)
 {
-	static const struct cmsg_hop discard_input_route[] = {
-		{ net_discard_input, NULL },
-	};
-	cmsg_init(&msg->discard_input, discard_input_route);
+	cmsg_init(&msg->discard_input, net_discard_input);
 	cpipe_push(&net_pipe, &msg->discard_input);
 }
 
@@ -1424,6 +1368,8 @@ tx_reply_iproto_error(struct cmsg *m)
 	iproto_reply_error(out, diag_last_error(&msg->diag),
 			   msg->header.sync, ::schema_version);
 	iproto_wpos_create(&msg->wpos, out);
+	cmsg_init(m, net_send_error);
+	cpipe_push(&net_pipe, m);
 }
 
 /** Inject a short delay on tx request processing for testing. */
@@ -1457,9 +1403,13 @@ tx_process1(struct cmsg *m)
 	iproto_reply_select(out, &svp, msg->header.sync, ::schema_version,
 			    tuple != 0);
 	iproto_wpos_create(&msg->wpos, out);
+	cmsg_init(m, net_send_msg);
+	cpipe_push(&net_pipe, m);
 	return;
 error:
 	tx_reply_error(msg);
+	cmsg_init(m, net_send_msg);
+	cpipe_push(&net_pipe, m);
 }
 
 static void
@@ -1500,9 +1450,13 @@ tx_process_select(struct cmsg *m)
 	iproto_reply_select(out, &svp, msg->header.sync,
 			    ::schema_version, count);
 	iproto_wpos_create(&msg->wpos, out);
+	cmsg_init(m, net_send_msg);
+	cpipe_push(&net_pipe, m);
 	return;
 error:
 	tx_reply_error(msg);
+	cmsg_init(m, net_send_msg);
+	cpipe_push(&net_pipe, m);
 }
 
 static void
@@ -1589,9 +1543,13 @@ tx_process_call(struct cmsg *m)
 	iproto_reply_select(out, &svp, msg->header.sync,
 			    ::schema_version, count);
 	iproto_wpos_create(&msg->wpos, out);
+	cmsg_init(m, net_send_msg);
+	cpipe_push(&net_pipe, m);
 	return;
 error:
 	tx_reply_error(msg);
+	cmsg_init(m, net_send_msg);
+	cpipe_push(&net_pipe, m);
 }
 
 static void
@@ -1632,9 +1590,13 @@ tx_process_misc(struct cmsg *m)
 	} catch (Exception *e) {
 		tx_reply_error(msg);
 	}
+	cmsg_init(m, net_send_msg);
+	cpipe_push(&net_pipe, m);
 	return;
 error:
 	tx_reply_error(msg);
+	cmsg_init(m, net_send_msg);
+	cpipe_push(&net_pipe, m);
 }
 
 static void
@@ -1683,9 +1645,13 @@ tx_process_sql(struct cmsg *m)
 	port_destroy(&port);
 	iproto_reply_sql(out, &header_svp, msg->header.sync, schema_version);
 	iproto_wpos_create(&msg->wpos, out);
+	cmsg_init(m, net_send_msg);
+	cpipe_push(&net_pipe, m);
 	return;
 error:
 	tx_reply_error(msg);
+	cmsg_init(m, net_send_msg);
+	cpipe_push(&net_pipe, m);
 }
 
 static void
@@ -1696,6 +1662,7 @@ tx_process_join_subscribe(struct cmsg *m)
 	try {
 		switch (msg->header.type) {
 		case IPROTO_JOIN:
+			cmsg_init(m, net_end_join);
 			/*
 			 * As soon as box_process_subscribe() returns
 			 * the lambda in the beginning of the block
@@ -1704,6 +1671,7 @@ tx_process_join_subscribe(struct cmsg *m)
 			box_process_join(&con->input, &msg->header);
 			break;
 		case IPROTO_SUBSCRIBE:
+			cmsg_init(m, net_end_subscribe);
 			/*
 			 * Subscribe never returns - unless there
 			 * is an error/exception. In that case
@@ -1716,11 +1684,13 @@ tx_process_join_subscribe(struct cmsg *m)
 			unreachable();
 		}
 	} catch (SocketError *e) {
+		cpipe_push(&net_pipe, m);
 		return; /* don't write error response to prevent SIGPIPE */
 	} catch (Exception *e) {
 		iproto_write_error(con->input.fd, e, ::schema_version,
 				   msg->header.sync);
 	}
+	cpipe_push(&net_pipe, m);
 }
 
 static void
@@ -1793,6 +1763,9 @@ net_end_subscribe(struct cmsg *m)
 	iproto_connection_close(con);
 }
 
+static void
+net_send_greeting(struct cmsg *m);
+
 /**
  * Handshake a connection: invoke the on-connect trigger
  * and possibly authenticate. Try to send the client an error
@@ -1826,6 +1799,8 @@ tx_process_connect(struct cmsg *m)
 		tx_reply_error(msg);
 		msg->close_connection = true;
 	}
+	cmsg_init(m, net_send_greeting);
+	cpipe_push(&net_pipe, m);
 }
 
 /**
@@ -1865,11 +1840,6 @@ net_send_greeting(struct cmsg *m)
 	iproto_msg_delete(msg);
 }
 
-static const struct cmsg_hop connect_route[] = {
-	{ tx_process_connect, &net_pipe },
-	{ net_send_greeting, NULL },
-};
-
 /** }}} */
 
 /**
@@ -1895,7 +1865,7 @@ iproto_on_accept(struct evio_service * /* service */, int fd,
 		mempool_free(&iproto_connection_pool, con);
 		return -1;
 	}
-	cmsg_init(&msg->base, connect_route);
+	cmsg_init(&msg->base, tx_process_connect);
 	msg->p_ibuf = con->p_ibuf;
 	msg->wpos = con->wpos;
 	msg->close_connection = false;
@@ -1979,6 +1949,8 @@ iproto_process_push(struct cmsg *m)
 	kharon->wpos = con->wpos;
 	if (evio_has_fd(&con->output) && !ev_is_active(&con->output))
 		ev_feed_event(con->loop, &con->output, EV_WRITE);
+	cmsg_init(m, tx_end_push);
+	cpipe_push(&tx_pipe, m);
 }
 
 /**
@@ -1989,7 +1961,7 @@ static void
 tx_begin_push(struct iproto_connection *con)
 {
 	assert(! con->tx.is_push_sent);
-	cmsg_init(&con->kharon.base, push_route);
+	cmsg_init(&con->kharon.base, iproto_process_push);
 	iproto_wpos_create(&con->kharon.wpos, con->tx.p_obuf);
 	con->tx.is_push_pending = false;
 	con->tx.is_push_sent = true;

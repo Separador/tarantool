@@ -54,28 +54,6 @@ enum cbus_stat_name {
 
 extern const char *cbus_stat_strings[CBUS_STAT_LAST];
 
-/**
- * One hop in a message travel route. A message may need to be
- * delivered to many destinations before it can be dispensed with.
- * For example, it may be necessary to return a message to the
- * sender just to destroy it.
- *
- * Message travel route is an array of cmsg_hop entries. The first
- * entry contains a delivery function at the first destination,
- * and the next destination. Subsequent entries are alike. The
- * last entry has a delivery function (most often a message
- * destructor) and NULL for the next destination.
- */
-struct cmsg_hop {
-	/** The message delivery function. */
-	cmsg_f f;
-	/**
-	 * The next destination to which the message
-	 * should be routed after its delivered locally.
-	 */
-	struct cpipe *pipe;
-};
-
 /** A message traveling between cords. */
 struct cmsg {
 	/**
@@ -84,30 +62,31 @@ struct cmsg {
 	 * delivered.
 	 */
 	struct stailq_entry fifo;
-	/** The message routing path. */
-	const struct cmsg_hop *route;
-	/** The current hop the message is at. */
-	const struct cmsg_hop *hop;
+	/** The message delivery function. */
+	cmsg_f f;
 };
 
 static inline struct cmsg *cmsg(void *ptr) { return (struct cmsg *) ptr; }
 
 /** Initialize the message and set its route. */
 static inline void
-cmsg_init(struct cmsg *msg, const struct cmsg_hop *route)
+cmsg_init(struct cmsg *msg, cmsg_f f)
 {
 	/**
 	 * The first hop can be done explicitly with cbus_push(),
 	 * msg->hop thus points to the second hop.
 	 */
-	msg->hop = msg->route = route;
+	msg->f = f;
 }
 
 /**
  * Deliver the message and dispatch it to the next hop.
  */
-void
-cmsg_deliver(struct cmsg *msg);
+static inline void
+cmsg_deliver(struct cmsg *msg)
+{
+	msg->f(msg);
+}
 
 /** A  uni-directional FIFO queue from one cord to another. */
 struct cpipe {
@@ -357,8 +336,9 @@ struct cbus_call_msg
 {
 	struct cmsg msg;
 	struct diag diag;
+	cbus_call_f call_f;
+	struct cpipe *caller_pipe;
 	struct fiber *caller;
-	struct cmsg_hop route[2];
 	bool complete;
 	int rc;
 	/** The callback to invoke in the peer thread. */

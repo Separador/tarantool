@@ -196,15 +196,10 @@ wal_write_to_disk(struct cmsg *msg);
 static void
 tx_schedule_commit(struct cmsg *msg);
 
-static struct cmsg_hop wal_request_route[] = {
-	{wal_write_to_disk, &wal_writer_singleton.tx_prio_pipe},
-	{tx_schedule_commit, NULL},
-};
-
 static void
 wal_msg_create(struct wal_msg *batch)
 {
-	cmsg_init(&batch->base, wal_request_route);
+	cmsg_init(&batch->base, wal_write_to_disk);
 	batch->approx_len = 0;
 	stailq_create(&batch->commit);
 	stailq_create(&batch->rollback);
@@ -214,7 +209,7 @@ wal_msg_create(struct wal_msg *batch)
 static struct wal_msg *
 wal_msg(struct cmsg *msg)
 {
-	return msg->route == wal_request_route ? (struct wal_msg *) msg : NULL;
+	return msg->f == wal_write_to_disk ? (struct wal_msg *) msg : NULL;
 }
 
 /** Write a request to a log in a single transaction. */
@@ -291,6 +286,9 @@ tx_schedule_commit(struct cmsg *msg)
 }
 
 static void
+wal_writer_end_rollback(struct cmsg *msg);
+
+static void
 tx_schedule_rollback(struct cmsg *msg)
 {
 	(void) msg;
@@ -309,6 +307,8 @@ tx_schedule_rollback(struct cmsg *msg)
 	if (msg != &writer->in_rollback)
 		mempool_free(&writer->msg_pool,
 			     container_of(msg, struct wal_msg, base));
+	cmsg_init(msg, wal_writer_end_rollback);
+	cpipe_push(&writer->wal_pipe, msg);
 }
 
 
@@ -542,7 +542,7 @@ wal_begin_checkpoint_f(struct cbus_call_msg *data)
 {
 	struct wal_checkpoint *msg = (struct wal_checkpoint *) data;
 	struct wal_writer *writer = &wal_writer_singleton;
-	if (writer->in_rollback.route != NULL) {
+	if (writer->in_rollback.f != NULL) {
 		/*
 		 * We're rolling back a failed write and so
 		 * can't make a checkpoint - see the comment
@@ -833,15 +833,12 @@ out:
 	 * critical.
 	 */
 	if (notify_gc) {
-		static struct cmsg_hop route[] = {
-			{ tx_notify_gc, NULL },
-		};
 		struct tx_notify_gc_msg *msg = malloc(sizeof(*msg));
 		if (msg != NULL) {
 			if (xdir_first_vclock(&writer->wal_dir,
 					      &msg->vclock) < 0)
 				vclock_copy(&msg->vclock, &writer->vclock);
-			cmsg_init(&msg->base, route);
+			cmsg_init(&msg->base, tx_notify_gc);
 			cpipe_push(&writer->tx_prio_pipe, &msg->base);
 		} else
 			say_warn("failed to allocate gc notification message");
@@ -850,9 +847,21 @@ out:
 }
 
 static void
-wal_writer_clear_bus(struct cmsg *msg)
+wal_writer_clear_bus_wal(struct cmsg *msg);
+
+static void
+wal_writer_clear_bus_tx(struct cmsg *msg)
 {
-	(void) msg;
+	cmsg_init(msg, wal_writer_clear_bus_wal);
+	cpipe_push(&wal_writer_singleton.wal_pipe, msg);
+}
+
+static void
+wal_writer_clear_bus_wal(struct cmsg *msg)
+{
+	cmsg_init(msg, tx_schedule_rollback);
+	cpipe_push(&wal_writer_singleton.tx_prio_pipe, msg);
+
 }
 
 static void
@@ -866,34 +875,11 @@ wal_writer_end_rollback(struct cmsg *msg)
 static void
 wal_writer_begin_rollback(struct wal_writer *writer)
 {
-	static struct cmsg_hop rollback_route[4] = {
-		/*
-		 * Step 1: clear the bus, so that it contains
-		 * no WAL write requests. This is achieved as a
-		 * side effect of an empty message travelling
-		 * through both bus pipes, while writer input
-		 * valve is closed by non-empty writer->rollback
-		 * list.
-		 */
-		{ wal_writer_clear_bus, &wal_writer_singleton.wal_pipe },
-		{ wal_writer_clear_bus, &wal_writer_singleton.tx_prio_pipe },
-		/*
-		 * Step 2: writer->rollback queue contains all
-		 * messages which need to be rolled back,
-		 * perform the rollback.
-		 */
-		{ tx_schedule_rollback, &wal_writer_singleton.wal_pipe },
-		/*
-		 * Step 3: re-open the WAL for writing.
-		 */
-		{ wal_writer_end_rollback, NULL }
-	};
-
 	/*
 	 * Make sure the WAL writer rolls back
 	 * all input until rollback mode is off.
 	 */
-	cmsg_init(&writer->in_rollback, rollback_route);
+	cmsg_init(&writer->in_rollback, wal_writer_clear_bus_tx);
 	cpipe_push(&writer->tx_prio_pipe, &writer->in_rollback);
 }
 
@@ -944,25 +930,27 @@ wal_write_to_disk(struct cmsg *msg)
 	while (inj != NULL && inj->bparam)
 		usleep(10);
 
-	if (writer->in_rollback.route != NULL) {
+	if (writer->in_rollback.f != NULL) {
 		/* We're rolling back a failed write. */
 		stailq_concat(&wal_msg->rollback, &wal_msg->commit);
 		vclock_copy(&wal_msg->vclock, &writer->vclock);
-		return;
+		goto exit;
 	}
 
 	/* Xlog is only rotated between queue processing  */
 	if (wal_opt_rotate(writer) != 0) {
 		stailq_concat(&wal_msg->rollback, &wal_msg->commit);
 		vclock_copy(&wal_msg->vclock, &writer->vclock);
-		return wal_writer_begin_rollback(writer);
+		wal_writer_begin_rollback(writer);
+		goto exit;
 	}
 
 	/* Ensure there's enough disk space before writing anything. */
 	if (wal_fallocate(writer, wal_msg->approx_len) != 0) {
 		stailq_concat(&wal_msg->rollback, &wal_msg->commit);
 		vclock_copy(&wal_msg->vclock, &writer->vclock);
-		return wal_writer_begin_rollback(writer);
+		wal_writer_begin_rollback(writer);
+		goto exit;
 	}
 
 	/*
@@ -1025,12 +1013,9 @@ wal_write_to_disk(struct cmsg *msg)
 	 */
 	if (!writer->checkpoint_triggered &&
 	    writer->checkpoint_wal_size > writer->checkpoint_threshold) {
-		static struct cmsg_hop route[] = {
-			{ tx_notify_checkpoint, NULL },
-		};
 		struct cmsg *msg = malloc(sizeof(*msg));
 		if (msg != NULL) {
-			cmsg_init(msg, route);
+			cmsg_init(msg, tx_notify_checkpoint);
 			cpipe_push(&writer->tx_prio_pipe, msg);
 			writer->checkpoint_triggered = true;
 		} else {
@@ -1072,6 +1057,9 @@ done:
 	}
 	fiber_gc();
 	wal_notify_watchers(writer, WAL_EVENT_WRITE);
+exit:
+	cmsg_init(msg, tx_schedule_commit);
+	cpipe_push(&writer->tx_prio_pipe, msg);
 }
 
 /** WAL writer main loop.  */
@@ -1265,12 +1253,15 @@ wal_rotate_vy_log()
 }
 
 static void
+wal_watcher_notify_perform(struct cmsg *cmsg);
+
+static void
 wal_watcher_notify(struct wal_watcher *watcher, unsigned events)
 {
 	assert(!rlist_empty(&watcher->next));
 
 	struct wal_watcher_msg *msg = &watcher->msg;
-	if (msg->cmsg.route != NULL) {
+	if (msg->cmsg.f != NULL) {
 		/*
 		 * If the notification message is still en route,
 		 * mark the watcher to resend it as soon as it
@@ -1281,9 +1272,12 @@ wal_watcher_notify(struct wal_watcher *watcher, unsigned events)
 	}
 
 	msg->events = events;
-	cmsg_init(&msg->cmsg, watcher->route);
+	cmsg_init(&msg->cmsg, wal_watcher_notify_perform);
 	cpipe_push(&watcher->watcher_pipe, &msg->cmsg);
 }
+
+static void
+wal_watcher_notify_complete(struct cmsg *cmsg);
 
 static void
 wal_watcher_notify_perform(struct cmsg *cmsg)
@@ -1293,6 +1287,8 @@ wal_watcher_notify_perform(struct cmsg *cmsg)
 	unsigned events = msg->events;
 
 	watcher->cb(watcher, events);
+	cmsg_init(&msg->cmsg, wal_watcher_notify_complete);
+	cpipe_push(&watcher->wal_pipe, &msg->cmsg);
 }
 
 static void
@@ -1301,7 +1297,7 @@ wal_watcher_notify_complete(struct cmsg *cmsg)
 	struct wal_watcher_msg *msg = (struct wal_watcher_msg *) cmsg;
 	struct wal_watcher *watcher = msg->watcher;
 
-	cmsg->route = NULL;
+	cmsg->f = NULL;
 
 	if (rlist_empty(&watcher->next)) {
 		/* The watcher is about to be destroyed. */
@@ -1354,14 +1350,8 @@ wal_set_watcher(struct wal_watcher *watcher, const char *name,
 	watcher->cb = watcher_cb;
 	watcher->msg.watcher = watcher;
 	watcher->msg.events = 0;
-	watcher->msg.cmsg.route = NULL;
+	watcher->msg.cmsg.f = NULL;
 	watcher->pending_events = 0;
-
-	assert(lengthof(watcher->route) == 2);
-	watcher->route[0] = (struct cmsg_hop)
-		{ wal_watcher_notify_perform, &watcher->wal_pipe };
-	watcher->route[1] = (struct cmsg_hop)
-		{ wal_watcher_notify_complete, NULL };
 	cbus_pair("wal", name, &watcher->wal_pipe, &watcher->watcher_pipe,
 		  wal_watcher_attach, watcher, process_cb);
 }

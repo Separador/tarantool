@@ -111,8 +111,6 @@ struct wal_watcher {
 	struct cpipe wal_pipe;
 	/** Pipe from WAL to the watcher. */
 	struct cpipe watcher_pipe;
-	/** Cbus route used for notifying the watcher. */
-	struct cmsg_hop route[2];
 	/** Message sent to notify the watcher. */
 	struct wal_watcher_msg msg;
 	/**

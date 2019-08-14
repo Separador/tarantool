@@ -108,12 +108,10 @@ static void
 do_forced_flush(struct cmsg *m)
 {
 	(void) m;
-	static struct cmsg_hop forced_flush_rote = { do_nothing, NULL };
-	static struct cmsg_hop finish_route = { finish_execution, NULL };
 	static struct cmsg forced_flush_msg;
 	static struct cmsg finish_msg;
-	cmsg_init(&forced_flush_msg, &forced_flush_rote);
-	cmsg_init(&finish_msg, &finish_route);
+	cmsg_init(&forced_flush_msg, do_nothing);
+	cmsg_init(&finish_msg, finish_execution);
 	cpipe_push(&pipe_to_main, &forced_flush_msg);
 	cpipe_flush_input(&pipe_to_main);
 	cpipe_push(&pipe_to_main, &finish_msg);
@@ -127,10 +125,8 @@ test_forced_flush(struct cmsg *m)
 	is(flushed_cnt, 1, "1 flush after test_several_messages");
 	printf("\n*** Test forced flush ***\n");
 	flushed_cnt = 0;
-	static struct cmsg_hop test_forced_flush_route =
-		{ do_forced_flush, NULL };
 	static struct cmsg test_forced_flush_msg;
-	cmsg_init(&test_forced_flush_msg, &test_forced_flush_route);
+	cmsg_init(&test_forced_flush_msg, do_forced_flush);
 	cpipe_push(&pipe_to_worker, &test_forced_flush_msg);
 }
 
@@ -143,10 +139,21 @@ test_forced_flush(struct cmsg *m)
 
 /** Do some event and check flush to was not called. */
 static void
-do_some_event(struct cmsg *m)
+do_some_event_1(struct cmsg *m)
 {
 	(void) m;
 	is(flushed_cnt, 0, "no flush during loop");
+	cmsg_init(m, do_nothing);
+	cpipe_push(&pipe_to_main, m);
+}
+
+static void
+do_some_event_2(struct cmsg *m)
+{
+	(void) m;
+	is(flushed_cnt, 0, "no flush during loop");
+	cmsg_init(m, test_forced_flush);
+	cpipe_push(&pipe_to_main, m);
 }
 
 /**
@@ -161,19 +168,11 @@ test_several_messages(struct cmsg *m)
 	is(flushed_cnt, 1, "1 flush after test_single_msg");
 	printf("\n*** Test several messages ***\n");
 	flushed_cnt = 0;
-	static struct cmsg_hop test_event_route[] = {
-		{ do_some_event, &pipe_to_main },
-		{ do_nothing, NULL },
-	};
-	static struct cmsg_hop test_several_msg_route[] = {
-		{ do_some_event, &pipe_to_main },
-		{ test_forced_flush, NULL },
-	};
 	static struct cmsg test_event_msg[2];
 	static struct cmsg test_several_msg;
-	cmsg_init(&test_event_msg[0], test_event_route);
-	cmsg_init(&test_event_msg[1], test_event_route);
-	cmsg_init(&test_several_msg, test_several_msg_route);
+	cmsg_init(&test_event_msg[0], do_some_event_1);
+	cmsg_init(&test_event_msg[1], do_some_event_1);
+	cmsg_init(&test_several_msg, do_some_event_2);
 	cpipe_push(&pipe_to_worker, &test_event_msg[0]);
 	cpipe_push(&pipe_to_worker, &test_event_msg[1]);
 	cpipe_push(&pipe_to_worker, &test_several_msg);
@@ -187,16 +186,19 @@ test_several_messages(struct cmsg *m)
  */
 
 static void
+do_nothing_2(struct cmsg *m)
+{
+	cmsg_init(m, test_several_messages);
+	cpipe_push(&pipe_to_main, m);
+}
+
+
+static void
 test_single_msg()
 {
 	printf("\n*** Test single message ***\n");
-	static struct cmsg_hop test_single_flush_route[] = {
-		{ do_nothing, &pipe_to_main },
-		/* Schedule the next test. */
-		{ test_several_messages, NULL },
-	};
 	static struct cmsg test_msg;
-	cmsg_init(&test_msg, test_single_flush_route);
+	cmsg_init(&test_msg, do_nothing_2);
 	cpipe_push(&pipe_to_worker, &test_msg);
 }
 
