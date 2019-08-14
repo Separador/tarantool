@@ -138,7 +138,7 @@ cpipe_destroy(struct cpipe *pipe)
 
 	struct cbus_endpoint *endpoint = pipe->endpoint;
 	struct cmsg_poison *poison = malloc(sizeof(struct cmsg_poison));
-	cmsg_init(&poison->msg, cbus_endpoint_poison_f);
+	poison->msg.f = cbus_endpoint_poison_f;
 	poison->endpoint = pipe->endpoint;
 	/*
 	 * Avoid the general purpose cpipe_push_input() since
@@ -337,8 +337,7 @@ cbus_call_perform(struct cmsg *m)
 	msg->rc = msg->func(msg);
 	if (msg->rc)
 		diag_move(&fiber()->diag, &msg->diag);
-	cmsg_init(m, cbus_call_done);
-	cpipe_push(msg->caller_pipe, m);
+	cpipe_push(msg->caller_pipe, cbus_call_done, m);
 }
 
 /**
@@ -354,13 +353,12 @@ cbus_call(struct cpipe *callee, struct cpipe *caller, struct cbus_call_msg *msg,
 	msg->caller = fiber();
 	msg->complete = false;
 	msg->caller_pipe = caller;
-	cmsg_init(cmsg(msg), cbus_call_perform);
 
 	msg->func = func;
 	msg->free_cb = free_cb;
 	msg->rc = 0;
 
-	cpipe_push(callee, cmsg(msg));
+	cpipe_push(callee, cbus_call_perform, cmsg(msg));
 
 	fiber_yield_timeout(timeout);
 	if (msg->complete == false) {           /* timed out or cancelled */
@@ -397,8 +395,7 @@ cbus_flush_perform(struct cmsg *cmsg)
 {
 	struct cbus_flush_msg *msg = container_of(cmsg, struct cbus_flush_msg,
 						  cmsg);
-	cmsg_init(cmsg, cbus_flush_complete);
-	cpipe_push(msg->caller_pipe, cmsg);
+	cpipe_push(msg->caller_pipe, cbus_flush_complete, cmsg);
 }
 
 void
@@ -407,11 +404,10 @@ cbus_flush(struct cpipe *callee, struct cpipe *caller,
 {
 	struct cbus_flush_msg msg;
 	msg.caller_pipe = caller;
-	cmsg_init(&msg.cmsg, cbus_flush_perform);
 	msg.complete = false;
 	fiber_cond_create(&msg.cond);
 
-	cpipe_push(callee, &msg.cmsg);
+	cpipe_push(callee, cbus_flush_perform, &msg.cmsg);
 
 	while (true) {
 		if (process_cb != NULL)
@@ -440,11 +436,10 @@ cbus_pair_perform(struct cmsg *cmsg)
 {
 	struct cbus_pair_msg *msg = container_of(cmsg,
 			struct cbus_pair_msg, cmsg);
-	cmsg_init(cmsg, cbus_pair_complete);
 	cpipe_create(msg->src_pipe, msg->src_name);
 	if (msg->pair_cb != NULL)
 		msg->pair_cb(msg->pair_arg);
-	cpipe_push(msg->src_pipe, cmsg);
+	cpipe_push(msg->src_pipe, cbus_pair_complete, cmsg);
 }
 
 static void
@@ -464,7 +459,6 @@ cbus_pair(const char *dest_name, const char *src_name,
 {
 	struct cbus_pair_msg msg;
 
-	cmsg_init(&msg.cmsg, cbus_pair_perform);
 	msg.pair_cb = pair_cb;
 	msg.pair_arg = pair_arg;
 	msg.complete = false;
@@ -476,7 +470,7 @@ cbus_pair(const char *dest_name, const char *src_name,
 	assert(endpoint != NULL);
 
 	cpipe_create(dest_pipe, dest_name);
-	cpipe_push(dest_pipe, &msg.cmsg);
+	cpipe_push(dest_pipe, cbus_pair_perform, &msg.cmsg);
 
 	while (true) {
 		if (process_cb != NULL)
@@ -510,8 +504,7 @@ cbus_unpair_prepare(struct cmsg *cmsg)
 			struct cbus_unpair_msg, cmsg);
 	if (msg->unpair_cb != NULL)
 		msg->unpair_cb(msg->unpair_arg);
-	cmsg_init(cmsg, cbus_unpair_flush);
-	cpipe_push(msg->src_pipe, cmsg);
+	cpipe_push(msg->src_pipe, cbus_unpair_flush, cmsg);
 }
 
 static void
@@ -519,8 +512,7 @@ cbus_unpair_flush(struct cmsg *cmsg)
 {
 	struct cbus_unpair_msg *msg = container_of(cmsg,
 			struct cbus_unpair_msg, cmsg);
-	cmsg_init(cmsg, cbus_unpair_perform);
-	cpipe_push(msg->dest_pipe, cmsg);
+	cpipe_push(msg->dest_pipe, cbus_unpair_perform, cmsg);
 }
 
 static void
@@ -531,8 +523,7 @@ cbus_unpair_perform(struct cmsg *cmsg)
 {
 	struct cbus_unpair_msg *msg = container_of(cmsg,
 			struct cbus_unpair_msg, cmsg);
-	cmsg_init(cmsg, cbus_unpair_complete);
-	cpipe_push(msg->src_pipe, cmsg);
+	cpipe_push(msg->src_pipe, cbus_unpair_complete, cmsg);
 	cpipe_destroy(msg->src_pipe);
 }
 
@@ -552,7 +543,6 @@ cbus_unpair(struct cpipe *dest_pipe, struct cpipe *src_pipe,
 {
 	struct cbus_unpair_msg msg;
 
-	cmsg_init(&msg.cmsg, cbus_unpair_prepare);
 	msg.unpair_cb = unpair_cb;
 	msg.unpair_arg = unpair_arg;
 	msg.src_pipe = src_pipe;
@@ -560,7 +550,7 @@ cbus_unpair(struct cpipe *dest_pipe, struct cpipe *src_pipe,
 	msg.complete = false;
 	fiber_cond_create(&msg.cond);
 
-	cpipe_push(dest_pipe, &msg.cmsg);
+	cpipe_push(dest_pipe, cbus_unpair_prepare, &msg.cmsg);
 
 	struct cbus_endpoint *endpoint = src_pipe->endpoint;
 	while (true) {
@@ -608,9 +598,7 @@ cbus_stop_loop(struct cpipe *pipe)
 {
 	struct cmsg *cancel = malloc(sizeof(struct cmsg));
 
-	cmsg_init(cancel, cbus_stop_loop_f);
-
-	cpipe_push(pipe, cancel);
+	cpipe_push(pipe, cbus_stop_loop_f, cancel);
 	ev_invoke(pipe->producer, &pipe->flush_input, EV_CUSTOM);
 }
 

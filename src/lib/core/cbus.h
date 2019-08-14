@@ -68,17 +68,6 @@ struct cmsg {
 
 static inline struct cmsg *cmsg(void *ptr) { return (struct cmsg *) ptr; }
 
-/** Initialize the message and set its route. */
-static inline void
-cmsg_init(struct cmsg *msg, cmsg_f f)
-{
-	/**
-	 * The first hop can be done explicitly with cbus_push(),
-	 * msg->hop thus points to the second hop.
-	 */
-	msg->f = f;
-}
-
 /**
  * Deliver the message and dispatch it to the next hop.
  */
@@ -191,10 +180,11 @@ cpipe_flush_input(struct cpipe *pipe)
  * flushed with cpipe_flush_input().
  */
 static inline void
-cpipe_push_input(struct cpipe *pipe, struct cmsg *msg)
+cpipe_push_input(struct cpipe *pipe, cmsg_f f, struct cmsg *msg)
 {
 	assert(loop() == pipe->producer);
 
+	msg->f = f;
 	stailq_add_tail_entry(&pipe->input, msg, fifo);
 	pipe->n_input++;
 	if (pipe->n_input >= pipe->max_input)
@@ -208,9 +198,9 @@ cpipe_push_input(struct cpipe *pipe, struct cmsg *msg)
  * messages coming up.
  */
 static inline void
-cpipe_push(struct cpipe *pipe, struct cmsg *msg)
+cpipe_push(struct cpipe *pipe, cmsg_f f, struct cmsg *msg)
 {
-	cpipe_push_input(pipe, msg);
+	cpipe_push_input(pipe, f, msg);
 	assert(pipe->n_input < pipe->max_input);
 	if (pipe->n_input == 1)
 		ev_feed_event(pipe->producer, &pipe->flush_input, EV_CUSTOM);

@@ -199,7 +199,6 @@ tx_schedule_commit(struct cmsg *msg);
 static void
 wal_msg_create(struct wal_msg *batch)
 {
-	cmsg_init(&batch->base, wal_write_to_disk);
 	batch->approx_len = 0;
 	stailq_create(&batch->commit);
 	stailq_create(&batch->rollback);
@@ -307,8 +306,7 @@ tx_schedule_rollback(struct cmsg *msg)
 	if (msg != &writer->in_rollback)
 		mempool_free(&writer->msg_pool,
 			     container_of(msg, struct wal_msg, base));
-	cmsg_init(msg, wal_writer_end_rollback);
-	cpipe_push(&writer->wal_pipe, msg);
+	cpipe_push(&writer->wal_pipe, wal_writer_end_rollback, msg);
 }
 
 
@@ -367,7 +365,7 @@ wal_writer_create(struct wal_writer *writer, enum wal_mode wal_mode,
 		writer->wal_dir.open_wflags |= O_SYNC;
 
 	stailq_create(&writer->rollback);
-	cmsg_init(&writer->in_rollback, NULL);
+	writer->in_rollback.f = NULL;
 
 	writer->checkpoint_wal_size = 0;
 	writer->checkpoint_threshold = INT64_MAX;
@@ -838,8 +836,8 @@ out:
 			if (xdir_first_vclock(&writer->wal_dir,
 					      &msg->vclock) < 0)
 				vclock_copy(&msg->vclock, &writer->vclock);
-			cmsg_init(&msg->base, tx_notify_gc);
-			cpipe_push(&writer->tx_prio_pipe, &msg->base);
+			cpipe_push(&writer->tx_prio_pipe, tx_notify_gc,
+				   &msg->base);
 		} else
 			say_warn("failed to allocate gc notification message");
 	}
@@ -852,15 +850,13 @@ wal_writer_clear_bus_wal(struct cmsg *msg);
 static void
 wal_writer_clear_bus_tx(struct cmsg *msg)
 {
-	cmsg_init(msg, wal_writer_clear_bus_wal);
-	cpipe_push(&wal_writer_singleton.wal_pipe, msg);
+	cpipe_push(&wal_writer_singleton.wal_pipe, wal_writer_clear_bus_wal, msg);
 }
 
 static void
 wal_writer_clear_bus_wal(struct cmsg *msg)
 {
-	cmsg_init(msg, tx_schedule_rollback);
-	cpipe_push(&wal_writer_singleton.tx_prio_pipe, msg);
+	cpipe_push(&wal_writer_singleton.tx_prio_pipe, tx_schedule_rollback, msg);
 
 }
 
@@ -869,7 +865,7 @@ wal_writer_end_rollback(struct cmsg *msg)
 {
 	(void) msg;
 	struct wal_writer *writer = &wal_writer_singleton;
-	cmsg_init(&writer->in_rollback, NULL);
+	writer->in_rollback.f = NULL;
 }
 
 static void
@@ -879,8 +875,8 @@ wal_writer_begin_rollback(struct wal_writer *writer)
 	 * Make sure the WAL writer rolls back
 	 * all input until rollback mode is off.
 	 */
-	cmsg_init(&writer->in_rollback, wal_writer_clear_bus_tx);
-	cpipe_push(&writer->tx_prio_pipe, &writer->in_rollback);
+	cpipe_push(&writer->tx_prio_pipe, wal_writer_clear_bus_tx,
+		   &writer->in_rollback);
 }
 
 /*
@@ -1015,8 +1011,8 @@ wal_write_to_disk(struct cmsg *msg)
 	    writer->checkpoint_wal_size > writer->checkpoint_threshold) {
 		struct cmsg *msg = malloc(sizeof(*msg));
 		if (msg != NULL) {
-			cmsg_init(msg, tx_notify_checkpoint);
-			cpipe_push(&writer->tx_prio_pipe, msg);
+			cpipe_push(&writer->tx_prio_pipe, tx_notify_checkpoint,
+				   msg);
 			writer->checkpoint_triggered = true;
 		} else {
 			say_warn("failed to allocate checkpoint "
@@ -1058,8 +1054,7 @@ done:
 	fiber_gc();
 	wal_notify_watchers(writer, WAL_EVENT_WRITE);
 exit:
-	cmsg_init(msg, tx_schedule_commit);
-	cpipe_push(&writer->tx_prio_pipe, msg);
+	cpipe_push(&writer->tx_prio_pipe, tx_schedule_commit, msg);
 }
 
 /** WAL writer main loop.  */
@@ -1155,7 +1150,7 @@ wal_write(struct journal *journal, struct journal_entry *entry)
 		 * thread right away.
 		 */
 		stailq_add_tail_entry(&batch->commit, entry, fifo);
-		cpipe_push(&writer->wal_pipe, &batch->base);
+		cpipe_push(&writer->wal_pipe, wal_write_to_disk, &batch->base);
 	}
 	batch->approx_len += entry->approx_len;
 	writer->wal_pipe.n_input += entry->n_rows * XROW_IOVMAX;
@@ -1272,8 +1267,8 @@ wal_watcher_notify(struct wal_watcher *watcher, unsigned events)
 	}
 
 	msg->events = events;
-	cmsg_init(&msg->cmsg, wal_watcher_notify_perform);
-	cpipe_push(&watcher->watcher_pipe, &msg->cmsg);
+	cpipe_push(&watcher->watcher_pipe, wal_watcher_notify_perform,
+		   &msg->cmsg);
 }
 
 static void
@@ -1287,8 +1282,7 @@ wal_watcher_notify_perform(struct cmsg *cmsg)
 	unsigned events = msg->events;
 
 	watcher->cb(watcher, events);
-	cmsg_init(&msg->cmsg, wal_watcher_notify_complete);
-	cpipe_push(&watcher->wal_pipe, &msg->cmsg);
+	cpipe_push(&watcher->wal_pipe, wal_watcher_notify_complete, &msg->cmsg);
 }
 
 static void

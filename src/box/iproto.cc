@@ -228,7 +228,7 @@ iproto_msg_new(struct iproto_connection *con);
 static void
 iproto_resume();
 
-static void
+static cmsg_f
 iproto_msg_decode(struct iproto_msg *msg, const char **pos, const char *reqend,
 		  bool *stop_input);
 
@@ -581,7 +581,7 @@ iproto_connection_close(struct iproto_connection *con)
 		 * is done only once.
 		 */
 		con->p_ibuf->wpos -= con->parse_size;
-		cpipe_push(&tx_pipe, &con->disconnect_msg);
+		cpipe_push(&tx_pipe, tx_process_disconnect, &con->disconnect_msg);
 	}
 	/*
 	 * If the connection has no outstanding requests in the
@@ -598,7 +598,7 @@ iproto_connection_close(struct iproto_connection *con)
 	if (iproto_connection_is_idle(con)) {
 		assert(! con->is_destroy_sent);
 		con->is_destroy_sent = true;
-		cpipe_push(&tx_pipe, &con->destroy_msg);
+		cpipe_push(&tx_pipe, tx_process_destroy, &con->destroy_msg);
 	}
 	rlist_del(&con->in_stop_list);
 }
@@ -768,12 +768,14 @@ err_msgpack:
 
 		msg->len = reqend - reqstart; /* total request length */
 
-		iproto_msg_decode(msg, &pos, reqend, &stop_input);
 		/*
 		 * This can't throw, but should not be
 		 * done in case of exception.
 		 */
-		cpipe_push_input(&tx_pipe, &msg->base);
+		cpipe_push_input(&tx_pipe,
+				 iproto_msg_decode(msg, &pos, reqend,
+						   &stop_input),
+				 &msg->base);
 		n_requests++;
 		/* Request is parsed */
 		assert(reqend > reqstart);
@@ -1031,8 +1033,6 @@ iproto_connection_new(int fd)
 	con->session = NULL;
 	rlist_create(&con->in_stop_list);
 	/* It may be very awkward to allocate at close. */
-	cmsg_init(&con->destroy_msg, tx_process_destroy);
-	cmsg_init(&con->disconnect_msg, tx_process_disconnect);
 	con->is_destroy_sent = false;
 	con->tx.is_push_pending = false;
 	con->tx.is_push_sent = false;
@@ -1117,7 +1117,7 @@ static const cmsg_f dml_route[IPROTO_TYPE_STAT_MAX] = {
 	NULL,                                   /* IPROTO_NOP */
 };
 
-static void
+static cmsg_f
 iproto_msg_decode(struct iproto_msg *msg, const char **pos, const char *reqend,
 		  bool *stop_input)
 {
@@ -1145,52 +1145,44 @@ iproto_msg_decode(struct iproto_msg *msg, const char **pos, const char *reqend,
 				    dml_request_key_map(type)))
 			goto error;
 		assert(type < sizeof(dml_route)/sizeof(*dml_route));
-		cmsg_init(&msg->base, dml_route[type]);
-		break;
+		return dml_route[type];
 	case IPROTO_CALL_16:
 	case IPROTO_CALL:
 	case IPROTO_EVAL:
 		if (xrow_decode_call(&msg->header, &msg->call))
 			goto error;
-		cmsg_init(&msg->base, tx_process_call);
-		break;
+		return tx_process_call;
 	case IPROTO_EXECUTE:
 		if (xrow_decode_sql(&msg->header, &msg->sql) != 0)
 			goto error;
-		cmsg_init(&msg->base, tx_process_sql);
-		break;
+		return tx_process_sql;
 	case IPROTO_PING:
-		cmsg_init(&msg->base, tx_process_misc);
-		break;
+		return tx_process_misc;
 	case IPROTO_JOIN:
-		cmsg_init(&msg->base, tx_process_join_subscribe);
 		*stop_input = true;
-		break;
+		return tx_process_join_subscribe;
 	case IPROTO_SUBSCRIBE:
-		cmsg_init(&msg->base, tx_process_join_subscribe);
 		*stop_input = true;
-		break;
+		return tx_process_join_subscribe;
 	case IPROTO_VOTE_DEPRECATED:
 	case IPROTO_VOTE:
-		cmsg_init(&msg->base, tx_process_misc);
-		break;
+		return tx_process_misc;
 	case IPROTO_AUTH:
 		if (xrow_decode_auth(&msg->header, &msg->auth))
 			goto error;
-		cmsg_init(&msg->base, tx_process_misc);
+		return tx_process_misc;
 		break;
 	default:
 		diag_set(ClientError, ER_UNKNOWN_REQUEST_TYPE,
 			 (uint32_t) type);
 		goto error;
 	}
-	return;
 error:
 	/** Log and send the error. */
 	diag_log();
 	diag_create(&msg->diag);
 	diag_move(&fiber()->diag, &msg->diag);
-	cmsg_init(&msg->base, tx_reply_iproto_error);
+	return tx_reply_iproto_error;
 }
 
 static void
@@ -1245,8 +1237,7 @@ tx_process_destroy(struct cmsg *m)
 	 */
 	obuf_destroy(&con->obuf[0]);
 	obuf_destroy(&con->obuf[1]);
-	cmsg_init(m, net_finish_destroy);
-	cpipe_push(&net_pipe, m);
+	cpipe_push(&net_pipe, net_finish_destroy, m);
 }
 
 /**
@@ -1291,8 +1282,7 @@ net_discard_input(struct cmsg *m)
 static void
 tx_discard_input(struct iproto_msg *msg)
 {
-	cmsg_init(&msg->discard_input, net_discard_input);
-	cpipe_push(&net_pipe, &msg->discard_input);
+	cpipe_push(&net_pipe, net_discard_input, &msg->discard_input);
 }
 
 /**
@@ -1368,8 +1358,7 @@ tx_reply_iproto_error(struct cmsg *m)
 	iproto_reply_error(out, diag_last_error(&msg->diag),
 			   msg->header.sync, ::schema_version);
 	iproto_wpos_create(&msg->wpos, out);
-	cmsg_init(m, net_send_error);
-	cpipe_push(&net_pipe, m);
+	cpipe_push(&net_pipe, net_send_error, m);
 }
 
 /** Inject a short delay on tx request processing for testing. */
@@ -1403,13 +1392,11 @@ tx_process1(struct cmsg *m)
 	iproto_reply_select(out, &svp, msg->header.sync, ::schema_version,
 			    tuple != 0);
 	iproto_wpos_create(&msg->wpos, out);
-	cmsg_init(m, net_send_msg);
-	cpipe_push(&net_pipe, m);
+	cpipe_push(&net_pipe, net_send_msg, m);
 	return;
 error:
 	tx_reply_error(msg);
-	cmsg_init(m, net_send_msg);
-	cpipe_push(&net_pipe, m);
+	cpipe_push(&net_pipe, net_send_msg, m);
 }
 
 static void
@@ -1450,13 +1437,11 @@ tx_process_select(struct cmsg *m)
 	iproto_reply_select(out, &svp, msg->header.sync,
 			    ::schema_version, count);
 	iproto_wpos_create(&msg->wpos, out);
-	cmsg_init(m, net_send_msg);
-	cpipe_push(&net_pipe, m);
+	cpipe_push(&net_pipe, net_send_msg, m);
 	return;
 error:
 	tx_reply_error(msg);
-	cmsg_init(m, net_send_msg);
-	cpipe_push(&net_pipe, m);
+	cpipe_push(&net_pipe, net_send_msg, m);
 }
 
 static void
@@ -1543,13 +1528,11 @@ tx_process_call(struct cmsg *m)
 	iproto_reply_select(out, &svp, msg->header.sync,
 			    ::schema_version, count);
 	iproto_wpos_create(&msg->wpos, out);
-	cmsg_init(m, net_send_msg);
-	cpipe_push(&net_pipe, m);
+	cpipe_push(&net_pipe, net_send_msg, m);
 	return;
 error:
 	tx_reply_error(msg);
-	cmsg_init(m, net_send_msg);
-	cpipe_push(&net_pipe, m);
+	cpipe_push(&net_pipe, net_send_msg, m);
 }
 
 static void
@@ -1590,13 +1573,11 @@ tx_process_misc(struct cmsg *m)
 	} catch (Exception *e) {
 		tx_reply_error(msg);
 	}
-	cmsg_init(m, net_send_msg);
-	cpipe_push(&net_pipe, m);
+	cpipe_push(&net_pipe, net_send_msg, m);
 	return;
 error:
 	tx_reply_error(msg);
-	cmsg_init(m, net_send_msg);
-	cpipe_push(&net_pipe, m);
+	cpipe_push(&net_pipe, net_send_msg, m);
 }
 
 static void
@@ -1645,13 +1626,11 @@ tx_process_sql(struct cmsg *m)
 	port_destroy(&port);
 	iproto_reply_sql(out, &header_svp, msg->header.sync, schema_version);
 	iproto_wpos_create(&msg->wpos, out);
-	cmsg_init(m, net_send_msg);
-	cpipe_push(&net_pipe, m);
+	cpipe_push(&net_pipe, net_send_msg, m);
 	return;
 error:
 	tx_reply_error(msg);
-	cmsg_init(m, net_send_msg);
-	cpipe_push(&net_pipe, m);
+	cpipe_push(&net_pipe, net_send_msg, m);
 }
 
 static void
@@ -1659,10 +1638,11 @@ tx_process_join_subscribe(struct cmsg *m)
 {
 	struct iproto_msg *msg = tx_accept_msg(m);
 	struct iproto_connection *con = msg->connection;
+	cmsg_f handler;
 	try {
 		switch (msg->header.type) {
 		case IPROTO_JOIN:
-			cmsg_init(m, net_end_join);
+			handler = net_end_join;
 			/*
 			 * As soon as box_process_subscribe() returns
 			 * the lambda in the beginning of the block
@@ -1671,7 +1651,7 @@ tx_process_join_subscribe(struct cmsg *m)
 			box_process_join(&con->input, &msg->header);
 			break;
 		case IPROTO_SUBSCRIBE:
-			cmsg_init(m, net_end_subscribe);
+			handler = net_end_subscribe;
 			/*
 			 * Subscribe never returns - unless there
 			 * is an error/exception. In that case
@@ -1684,13 +1664,13 @@ tx_process_join_subscribe(struct cmsg *m)
 			unreachable();
 		}
 	} catch (SocketError *e) {
-		cpipe_push(&net_pipe, m);
+		cpipe_push(&net_pipe, handler, m);
 		return; /* don't write error response to prevent SIGPIPE */
 	} catch (Exception *e) {
 		iproto_write_error(con->input.fd, e, ::schema_version,
 				   msg->header.sync);
 	}
-	cpipe_push(&net_pipe, m);
+	cpipe_push(&net_pipe, handler, m);
 }
 
 static void
@@ -1719,7 +1699,7 @@ net_send_msg(struct cmsg *m)
 }
 
 /**
- * Complete sending an iproto error: 
+ * Complete sending an iproto error:
  * recycle the error object and flush output.
  */
 static void
@@ -1799,8 +1779,7 @@ tx_process_connect(struct cmsg *m)
 		tx_reply_error(msg);
 		msg->close_connection = true;
 	}
-	cmsg_init(m, net_send_greeting);
-	cpipe_push(&net_pipe, m);
+	cpipe_push(&net_pipe, net_send_greeting, m);
 }
 
 /**
@@ -1865,11 +1844,10 @@ iproto_on_accept(struct evio_service * /* service */, int fd,
 		mempool_free(&iproto_connection_pool, con);
 		return -1;
 	}
-	cmsg_init(&msg->base, tx_process_connect);
 	msg->p_ibuf = con->p_ibuf;
 	msg->wpos = con->wpos;
 	msg->close_connection = false;
-	cpipe_push(&tx_pipe, &msg->base);
+	cpipe_push(&tx_pipe, tx_process_connect, &msg->base);
 	return 0;
 }
 
@@ -1949,8 +1927,7 @@ iproto_process_push(struct cmsg *m)
 	kharon->wpos = con->wpos;
 	if (evio_has_fd(&con->output) && !ev_is_active(&con->output))
 		ev_feed_event(con->loop, &con->output, EV_WRITE);
-	cmsg_init(m, tx_end_push);
-	cpipe_push(&tx_pipe, m);
+	cpipe_push(&tx_pipe, tx_end_push, m);
 }
 
 /**
@@ -1961,11 +1938,10 @@ static void
 tx_begin_push(struct iproto_connection *con)
 {
 	assert(! con->tx.is_push_sent);
-	cmsg_init(&con->kharon.base, iproto_process_push);
 	iproto_wpos_create(&con->kharon.wpos, con->tx.p_obuf);
 	con->tx.is_push_pending = false;
 	con->tx.is_push_sent = true;
-	cpipe_push(&net_pipe, (struct cmsg *) &con->kharon);
+	cpipe_push(&net_pipe, iproto_process_push, (struct cmsg *) &con->kharon);
 }
 
 static void

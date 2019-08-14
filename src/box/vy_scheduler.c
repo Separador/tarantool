@@ -886,8 +886,8 @@ fail:
 	diag_move(diag_get(), &batch->diag);
 	txn_rollback();
 done:
-	cmsg_init(cmsg, vy_deferred_delete_batch_free_f);
-	cpipe_push(&task->worker->worker_pipe, cmsg);
+	cpipe_push(&task->worker->worker_pipe, vy_deferred_delete_batch_free_f,
+		   cmsg);
 }
 
 /**
@@ -941,8 +941,8 @@ vy_task_deferred_delete_flush(struct vy_task *task)
 	task->deferred_delete_batch = NULL;
 	task->deferred_delete_in_progress++;
 
-	cmsg_init(&batch->cmsg, vy_deferred_delete_batch_process_f);
-	cpipe_push(&worker->tx_pipe, &batch->cmsg);
+	cpipe_push(&worker->tx_pipe, vy_deferred_delete_batch_process_f,
+		   &batch->cmsg);
 }
 
 /**
@@ -1740,8 +1740,7 @@ vy_task_f(va_list va)
 		task->is_failed = true;
 		diag_move(diag, &task->diag);
 	}
-	cmsg_init(&task->cmsg, vy_task_complete_f);
-	cpipe_push(&worker->tx_pipe, &task->cmsg);
+	cpipe_push(&worker->tx_pipe, vy_task_complete_f, &task->cmsg);
 	task->fiber = NULL;
 	worker->task = NULL;
 	return 0;
@@ -1766,8 +1765,7 @@ vy_task_execute_f(struct cmsg *cmsg)
 	if (task->fiber == NULL) {
 		task->is_failed = true;
 		diag_move(diag_get(), &task->diag);
-		cmsg_init(&task->cmsg, vy_task_complete_f);
-		cpipe_push(&worker->tx_pipe, &task->cmsg);
+		cpipe_push(&worker->tx_pipe, vy_task_complete_f, &task->cmsg);
 	} else {
 		worker->task = task;
 		fiber_start(task->fiber, task);
@@ -2027,8 +2025,7 @@ vy_scheduler_f(va_list va)
 		}
 
 		/* Queue the task for execution. */
-		cmsg_init(&task->cmsg, vy_task_execute_f);
-		cpipe_push(&task->worker->worker_pipe, &task->cmsg);
+		cpipe_push(&task->worker->worker_pipe, vy_task_execute_f, &task->cmsg);
 
 		fiber_reschedule();
 		continue;

@@ -110,11 +110,9 @@ do_forced_flush(struct cmsg *m)
 	(void) m;
 	static struct cmsg forced_flush_msg;
 	static struct cmsg finish_msg;
-	cmsg_init(&forced_flush_msg, do_nothing);
-	cmsg_init(&finish_msg, finish_execution);
-	cpipe_push(&pipe_to_main, &forced_flush_msg);
+	cpipe_push(&pipe_to_main, do_nothing, &forced_flush_msg);
 	cpipe_flush_input(&pipe_to_main);
-	cpipe_push(&pipe_to_main, &finish_msg);
+	cpipe_push(&pipe_to_main, finish_execution, &finish_msg);
 	expected_flushed_cnt = 1;
 }
 
@@ -126,8 +124,7 @@ test_forced_flush(struct cmsg *m)
 	printf("\n*** Test forced flush ***\n");
 	flushed_cnt = 0;
 	static struct cmsg test_forced_flush_msg;
-	cmsg_init(&test_forced_flush_msg, do_forced_flush);
-	cpipe_push(&pipe_to_worker, &test_forced_flush_msg);
+	cpipe_push(&pipe_to_worker, do_forced_flush, &test_forced_flush_msg);
 }
 
 /** }}} Test forced flush. ------------------------------------ */
@@ -143,8 +140,7 @@ do_some_event_1(struct cmsg *m)
 {
 	(void) m;
 	is(flushed_cnt, 0, "no flush during loop");
-	cmsg_init(m, do_nothing);
-	cpipe_push(&pipe_to_main, m);
+	cpipe_push(&pipe_to_main, do_nothing, m);
 }
 
 static void
@@ -152,8 +148,7 @@ do_some_event_2(struct cmsg *m)
 {
 	(void) m;
 	is(flushed_cnt, 0, "no flush during loop");
-	cmsg_init(m, test_forced_flush);
-	cpipe_push(&pipe_to_main, m);
+	cpipe_push(&pipe_to_main, test_forced_flush, m);
 }
 
 /**
@@ -170,12 +165,9 @@ test_several_messages(struct cmsg *m)
 	flushed_cnt = 0;
 	static struct cmsg test_event_msg[2];
 	static struct cmsg test_several_msg;
-	cmsg_init(&test_event_msg[0], do_some_event_1);
-	cmsg_init(&test_event_msg[1], do_some_event_1);
-	cmsg_init(&test_several_msg, do_some_event_2);
-	cpipe_push(&pipe_to_worker, &test_event_msg[0]);
-	cpipe_push(&pipe_to_worker, &test_event_msg[1]);
-	cpipe_push(&pipe_to_worker, &test_several_msg);
+	cpipe_push(&pipe_to_worker, do_some_event_1, &test_event_msg[0]);
+	cpipe_push(&pipe_to_worker, do_some_event_1, &test_event_msg[1]);
+	cpipe_push(&pipe_to_worker, do_some_event_2, &test_several_msg);
 }
 
 /** }}} Test several messages. -------------------------------- */
@@ -188,8 +180,7 @@ test_several_messages(struct cmsg *m)
 static void
 do_nothing_2(struct cmsg *m)
 {
-	cmsg_init(m, test_several_messages);
-	cpipe_push(&pipe_to_main, m);
+	cpipe_push(&pipe_to_main, test_several_messages, m);
 }
 
 
@@ -198,8 +189,7 @@ test_single_msg()
 {
 	printf("\n*** Test single message ***\n");
 	static struct cmsg test_msg;
-	cmsg_init(&test_msg, do_nothing_2);
-	cpipe_push(&pipe_to_worker, &test_msg);
+	cpipe_push(&pipe_to_worker, do_nothing_2, &test_msg);
 }
 
 /** }}} Test single message. ---------------------------------- */
