@@ -147,7 +147,7 @@ replica_is_orphan(struct replica *replica)
 	       relay_get_state(replica->relay) != RELAY_FOLLOW;
 }
 
-static void
+static int
 replica_on_applier_state_f(struct trigger *trigger, void *event);
 
 static struct replica *
@@ -401,48 +401,53 @@ replica_on_applier_disconnect(struct replica *replica)
 		replicaset.applier.loading++;
 }
 
-static void
+static int
 replica_on_applier_state_f(struct trigger *trigger, void *event)
 {
 	(void)event;
 	struct replica *replica = container_of(trigger,
 			struct replica, on_applier_state);
 	switch (replica->applier->state) {
-	case APPLIER_INITIAL_JOIN:
-		replicaset.is_joining = true;
-		break;
-	case APPLIER_JOINED:
-		replicaset.is_joining = false;
-		break;
-	case APPLIER_CONNECTED:
-		if (tt_uuid_is_nil(&replica->uuid))
-			replica_on_applier_connect(replica);
-		else
-			replica_on_applier_reconnect(replica);
-		break;
-	case APPLIER_LOADING:
-	case APPLIER_DISCONNECTED:
-		replica_on_applier_disconnect(replica);
-		break;
-	case APPLIER_FOLLOW:
-		replica_on_applier_sync(replica);
-		break;
-	case APPLIER_OFF:
-		/*
-		 * Connection to self, duplicate connection
-		 * to the same master, or the applier fiber
-		 * has been cancelled. Assume synced.
-		 */
-		replica_on_applier_sync(replica);
-		break;
-	case APPLIER_STOPPED:
-		/* Unrecoverable error. */
-		replica_on_applier_disconnect(replica);
-		break;
-	default:
-		break;
+		case APPLIER_INITIAL_JOIN:
+			replicaset.is_joining = true;
+			break;
+		case APPLIER_JOINED:
+			replicaset.is_joining = false;
+			break;
+		case APPLIER_CONNECTED:
+			try {
+				if (tt_uuid_is_nil(&replica->uuid))
+					replica_on_applier_connect(replica);
+				else
+					replica_on_applier_reconnect(replica);
+			} catch (Exception *e) {
+				return -1;
+			}
+			break;
+		case APPLIER_LOADING:
+		case APPLIER_DISCONNECTED:
+			replica_on_applier_disconnect(replica);
+			break;
+		case APPLIER_FOLLOW:
+			replica_on_applier_sync(replica);
+			break;
+		case APPLIER_OFF:
+			/*
+			 * Connection to self, duplicate connection
+			 * to the same master, or the applier fiber
+			 * has been cancelled. Assume synced.
+			 */
+			replica_on_applier_sync(replica);
+			break;
+		case APPLIER_STOPPED:
+			/* Unrecoverable error. */
+			replica_on_applier_disconnect(replica);
+			break;
+		default:
+			break;
 	}
 	fiber_cond_signal(&replicaset.applier.cond);
+	return 0;
 }
 
 /**
@@ -575,7 +580,7 @@ struct applier_on_connect {
 	struct replicaset_connect_state *state;
 };
 
-static void
+static int
 applier_on_connect_f(struct trigger *trigger, void *event)
 {
 	struct applier_on_connect *on_connect = container_of(trigger,
@@ -592,10 +597,11 @@ applier_on_connect_f(struct trigger *trigger, void *event)
 		state->connected++;
 		break;
 	default:
-		return;
+		return 0;
 	}
 	fiber_cond_signal(&state->wakeup);
 	applier_pause(applier);
+	return 0;
 }
 
 void

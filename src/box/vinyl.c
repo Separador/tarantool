@@ -1040,7 +1040,7 @@ struct vy_check_format_ctx {
  * This is an on_replace trigger callback that checks inserted
  * tuples against a new format.
  */
-static void
+static int
 vy_check_format_on_replace(struct trigger *trigger, void *event)
 {
 	struct txn *txn = event;
@@ -1048,15 +1048,16 @@ vy_check_format_on_replace(struct trigger *trigger, void *event)
 	struct vy_check_format_ctx *ctx = trigger->data;
 
 	if (stmt->new_tuple == NULL)
-		return; /* DELETE, nothing to do */
+		return 0; /* DELETE, nothing to do */
 
 	if (ctx->is_failed)
-		return; /* already failed, nothing to do */
+		return 0; /* already failed, nothing to do */
 
 	if (tuple_validate(ctx->format, stmt->new_tuple) != 0) {
 		ctx->is_failed = true;
 		diag_move(diag_get(), &ctx->diag);
 	}
+	return 0;
 }
 
 static int
@@ -3709,13 +3710,14 @@ fail:
 
 /* {{{ Cursor */
 
-static void
+static int
 vinyl_iterator_on_tx_destroy(struct trigger *trigger, void *event)
 {
 	(void)event;
 	struct vinyl_iterator *it = container_of(trigger,
 			struct vinyl_iterator, on_tx_destroy);
 	it->tx = NULL;
+	return 0;
 }
 
 static int
@@ -4008,7 +4010,7 @@ struct vy_build_ctx {
  * This is an on_replace trigger callback that forwards DML requests
  * to the index that is currently being built.
  */
-static void
+static int
 vy_build_on_replace(struct trigger *trigger, void *event)
 {
 	struct txn *txn = event;
@@ -4019,7 +4021,7 @@ vy_build_on_replace(struct trigger *trigger, void *event)
 	struct vy_lsm *lsm = ctx->lsm;
 
 	if (ctx->is_failed)
-		return; /* already failed, nothing to do */
+		return 0; /* already failed, nothing to do */
 
 	/* Check new tuples for conformity to the new format. */
 	if (stmt->new_tuple != NULL &&
@@ -4056,7 +4058,7 @@ vy_build_on_replace(struct trigger *trigger, void *event)
 		if (rc != 0)
 			goto err;
 	}
-	return;
+	return 0;
 err:
 	/*
 	 * No need to abort the DDL request if this transaction
@@ -4066,9 +4068,10 @@ err:
 	 * context isn't valid and so we must not modify it.
 	 */
 	if (tx->state == VINYL_TX_ABORT)
-		return;
+		return 0;
 	ctx->is_failed = true;
 	diag_move(diag_get(), &ctx->diag);
+	return 0;
 }
 
 /**
@@ -4464,7 +4467,7 @@ out:
 
 /* {{{ Deferred DELETE handling */
 
-static void
+static int
 vy_deferred_delete_on_commit(struct trigger *trigger, void *event)
 {
 	struct txn *txn = event;
@@ -4477,15 +4480,17 @@ vy_deferred_delete_on_commit(struct trigger *trigger, void *event)
 	mem->dump_lsn = txn->signature;
 	/* Unpin the mem pinned in vy_deferred_delete_on_replace(). */
 	vy_mem_unpin(mem);
+	return 0;
 }
 
-static void
+static int
 vy_deferred_delete_on_rollback(struct trigger *trigger, void *event)
 {
 	(void)event;
 	struct vy_mem *mem = trigger->data;
 	/* Unpin the mem pinned in vy_deferred_delete_on_replace(). */
 	vy_mem_unpin(mem);
+	return 0;
 }
 
 /**
@@ -4512,7 +4517,7 @@ vy_deferred_delete_on_rollback(struct trigger *trigger, void *event)
  * one of the trees got dumped while the other didn't, we would
  * mistakenly skip both statements on recovery.
  */
-static void
+static int
 vy_deferred_delete_on_replace(struct trigger *trigger, void *event)
 {
 	(void)trigger;
@@ -4522,7 +4527,7 @@ vy_deferred_delete_on_replace(struct trigger *trigger, void *event)
 	bool is_first_statement = txn_is_first_statement(txn);
 
 	if (stmt->new_tuple == NULL)
-		return;
+		return 0;
 	/*
 	 * Extract space id, LSN of the deferred DELETE statement,
 	 * and the deleted tuple from the system space row.
@@ -4531,27 +4536,27 @@ vy_deferred_delete_on_replace(struct trigger *trigger, void *event)
 	tuple_rewind(&it, stmt->new_tuple);
 	uint32_t space_id;
 	if (tuple_next_u32(&it, &space_id) != 0)
-		diag_raise();
+		return -1;
 	uint64_t lsn;
 	if (tuple_next_u64(&it, &lsn) != 0)
-		diag_raise();
+		return -1;
 	const char *delete_data = tuple_next_with_type(&it, MP_ARRAY);
 	if (delete_data == NULL)
-		diag_raise();
+		return -1;
 	const char *delete_data_end = delete_data;
 	mp_next(&delete_data_end);
 
 	/* Look up the space. */
 	struct space *space = space_cache_find(space_id);
 	if (space == NULL)
-		diag_raise();
+		return -1;
 	/*
 	 * All secondary indexes could have been dropped, in
 	 * which case we don't need to generate deferred DELETE
 	 * statements anymore.
 	 */
 	if (space->index_count <= 1)
-		return;
+		return 0;
 	/*
 	 * Wait for memory quota if necessary before starting to
 	 * process the batch (we can't yield between statements).
@@ -4565,7 +4570,7 @@ vy_deferred_delete_on_replace(struct trigger *trigger, void *event)
 	struct tuple *delete = vy_stmt_new_delete(pk->mem_format, delete_data,
 						  delete_data_end);
 	if (delete == NULL)
-		diag_raise();
+		return -1;
 	/*
 	 * A deferred DELETE may be generated after new statements
 	 * were committed for the deleted key. So we must use the
@@ -4657,7 +4662,8 @@ vy_deferred_delete_on_replace(struct trigger *trigger, void *event)
 
 	tuple_unref(delete);
 	if (rc != 0)
-		diag_raise();
+		return -1;
+	return 0;
 }
 
 static struct trigger on_replace_vinyl_deferred_delete = {

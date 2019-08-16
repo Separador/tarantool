@@ -198,7 +198,7 @@ ck_constraint_delete(struct ck_constraint *ck_constraint);
  * Raises an exception when some ck constraint is unsatisfied.
  * The diag message is set.
  */
-void
+int
 ck_constraint_on_replace_trigger(struct trigger *trigger, void *event);
 
 /**
