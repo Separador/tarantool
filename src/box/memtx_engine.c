@@ -48,6 +48,7 @@
 #include "replication.h"
 #include "schema.h"
 #include "gc.h"
+#include "wal.h"
 
 /* sync snapshot every 16MB */
 #define SNAP_SYNC_INTERVAL	(1 << 24)
@@ -269,7 +270,7 @@ memtx_engine_begin_final_recovery(struct engine *engine)
 	/* End of the fast path: loaded the primary key. */
 	space_foreach(memtx_end_build_primary_key, memtx);
 
-	if (!memtx->force_recovery) {
+	if (!memtx->force_recovery && wal_dir_lock >= 0) {
 		/*
 		 * Fast start path: "play out" WAL
 		 * records using the primary key only,
