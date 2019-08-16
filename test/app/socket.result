@@ -1944,6 +1944,9 @@ c:send("354 Please type your message\n")
 ---
 - 29
 ...
+fiber.sleep(.1)
+---
+...
 sc:close()
 ---
 - 1
