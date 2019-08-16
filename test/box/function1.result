@@ -405,12 +405,12 @@ box.execute('SELECT "function1.divide"()')
 box.execute('SELECT "function1.divide"(6)')
 ---
 - null
-- wrong number of arguments to function function1.divide()
+- 'invalid number of arguments is passed to function1.divide(): expected 0, got 1'
 ...
 box.execute('SELECT "function1.divide"(6, 3)')
 ---
 - null
-- wrong number of arguments to function function1.divide()
+- 'invalid number of arguments is passed to function1.divide(): expected 0, got 2'
 ...
 box.func["function1.divide"]:drop()
 ---
@@ -429,17 +429,17 @@ test_run:cmd("setopt delimiter ''");
 box.execute('SELECT "function1.divide"()')
 ---
 - null
-- wrong number of arguments to function function1.divide()
+- 'invalid number of arguments is passed to function1.divide(): expected 2, got 0'
 ...
 box.execute('SELECT "function1.divide"(6)')
 ---
 - null
-- wrong number of arguments to function function1.divide()
+- 'invalid number of arguments is passed to function1.divide(): expected 2, got 1'
 ...
 box.execute('SELECT "function1.divide"(6, 3, 3)')
 ---
 - null
-- wrong number of arguments to function function1.divide()
+- 'invalid number of arguments is passed to function1.divide(): expected 2, got 3'
 ...
 box.execute('SELECT "function1.divide"(6, 3)')
 ---
