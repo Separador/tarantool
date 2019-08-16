@@ -569,48 +569,64 @@ space_def_new_from_tuple(struct tuple *tuple, uint32_t errcode,
 			 struct region *region)
 {
 	uint32_t name_len;
-	const char *name =
-		tuple_field_str_xc(tuple, BOX_SPACE_FIELD_NAME, &name_len);
-	if (name_len > BOX_NAME_MAX)
-		tnt_raise(ClientError, errcode,
-			  tt_cstr(name, BOX_INVALID_NAME_MAX),
-			  "space name is too long");
+	const char *name = tuple_field_str(tuple, BOX_SPACE_FIELD_NAME,
+					   &name_len);
+	if (name == NULL)
+		return NULL;
+	if (name_len > BOX_NAME_MAX) {
+		diag_set(ClientError, errcode,
+			 tt_cstr(name, BOX_INVALID_NAME_MAX),
+			 "space name is too long");
+		return NULL;
+	}
 	if (identifier_check(name, name_len) != 0)
-		diag_raise();
-	uint32_t id = tuple_field_u32_xc(tuple, BOX_SPACE_FIELD_ID);
+		return NULL;
+	uint32_t id;
+	if (tuple_field_u32(tuple, BOX_SPACE_FIELD_ID, &id) != 0)
+		return NULL;
 	if (id > BOX_SPACE_MAX) {
-		tnt_raise(ClientError, errcode, tt_cstr(name, name_len),
-			  "space id is too big");
+		diag_set(ClientError, errcode, tt_cstr(name, name_len),
+			 "space id is too big");
+		return NULL;
 	}
 	if (id == 0) {
-		tnt_raise(ClientError, errcode, tt_cstr(name, name_len),
-			  "space id 0 is reserved");
+		diag_set(ClientError, errcode, tt_cstr(name, name_len),
+			 "space id 0 is reserved");
+		return NULL;
 	}
-	uint32_t uid = tuple_field_u32_xc(tuple, BOX_SPACE_FIELD_UID);
-	uint32_t exact_field_count =
-		tuple_field_u32_xc(tuple, BOX_SPACE_FIELD_FIELD_COUNT);
+	uint32_t uid;
+	if (tuple_field_u32(tuple, BOX_SPACE_FIELD_UID, &uid) != 0)
+		return NULL;
+	uint32_t exact_field_count;
+	if (tuple_field_u32(tuple, BOX_SPACE_FIELD_FIELD_COUNT,
+			    &exact_field_count) != 0)
+		return NULL;
 	uint32_t engine_name_len;
-	const char *engine_name =
-		tuple_field_str_xc(tuple, BOX_SPACE_FIELD_ENGINE,
-				   &engine_name_len);
+	const char *engine_name = tuple_field_str(tuple,
+						  BOX_SPACE_FIELD_ENGINE, &engine_name_len);
+	if (engine_name == NULL)
+		return NULL;
 	/*
 	 * Engines are compiled-in so their names are known in
 	 * advance to be shorter than names of other identifiers.
 	 */
 	if (engine_name_len > ENGINE_NAME_MAX) {
-		tnt_raise(ClientError, errcode, tt_cstr(name, name_len),
-			  "space engine name is too long");
+		diag_set(ClientError, errcode, tt_cstr(name, name_len),
+			 "space engine name is too long");
+		return NULL;
 	}
 	if (identifier_check(engine_name, engine_name_len) != 0)
-		diag_raise();
+		return NULL;
 	/* Check space opts. */
-	const char *space_opts =
-		tuple_field_with_type_xc(tuple, BOX_SPACE_FIELD_OPTS,
-					 MP_MAP);
+	const char *space_opts = tuple_field_with_type(tuple,
+						       BOX_SPACE_FIELD_OPTS, MP_MAP);
+	if (space_opts == NULL)
+		return NULL;
 	/* Check space format */
-	const char *format =
-		tuple_field_with_type_xc(tuple, BOX_SPACE_FIELD_FORMAT,
-					 MP_ARRAY);
+	const char *format = tuple_field_with_type(tuple,
+						   BOX_SPACE_FIELD_FORMAT, MP_ARRAY);
+	if (format == NULL)
+		return NULL;
 	struct field_def *fields = NULL;
 	uint32_t field_count;
 	if (space_format_decode(format, &field_count, name,
@@ -2325,11 +2341,16 @@ on_replace_dd_index(struct trigger * /* trigger */, void *event)
 	struct txn_stmt *stmt = txn_current_stmt(txn);
 	struct tuple *old_tuple = stmt->old_tuple;
 	struct tuple *new_tuple = stmt->new_tuple;
-	uint32_t id = tuple_field_u32_xc(old_tuple ? old_tuple : new_tuple,
-					 BOX_INDEX_FIELD_SPACE_ID);
-	uint32_t iid = tuple_field_u32_xc(old_tuple ? old_tuple : new_tuple,
-					  BOX_INDEX_FIELD_ID);
-	struct space *old_space = space_cache_find_xc(id);
+	uint32_t id, iid;
+	if (tuple_field_u32(old_tuple ? old_tuple : new_tuple,
+			    BOX_INDEX_FIELD_SPACE_ID, &id) != 0)
+		return -1;
+	if (tuple_field_u32(old_tuple ? old_tuple : new_tuple,
+			    BOX_INDEX_FIELD_ID, &iid) != 0)
+		return -1;
+	struct space *old_space = space_cache_find(id);
+	if (old_space == NULL)
+		return -1;
 	if (old_space->def->opts.is_view) {
 		diag_set(ClientError, ER_ALTER_SPACE, space_name(old_space),
 			 "can not add index on a view");
@@ -2694,32 +2715,42 @@ static struct user_def *
 user_def_new_from_tuple(struct tuple *tuple)
 {
 	uint32_t name_len;
-	const char *name = tuple_field_str_xc(tuple, BOX_USER_FIELD_NAME,
-					      &name_len);
+	const char *name = tuple_field_str(tuple, BOX_USER_FIELD_NAME,
+					   &name_len);
+	if (name == NULL)
+		return NULL;
 	if (name_len > BOX_NAME_MAX) {
-		tnt_raise(ClientError, ER_CREATE_USER,
-			  tt_cstr(name, BOX_INVALID_NAME_MAX),
-			  "user name is too long");
+		diag_set(ClientError, ER_CREATE_USER,
+			 tt_cstr(name, BOX_INVALID_NAME_MAX),
+			 "user name is too long");
+		return NULL;
 	}
 	size_t size = user_def_sizeof(name_len);
 	/* Use calloc: in case user password is empty, fill it with \0 */
 	struct user_def *user = (struct user_def *) malloc(size);
-	if (user == NULL)
-		tnt_raise(OutOfMemory, size, "malloc", "user");
+	if (user == NULL) {
+		diag_set(OutOfMemory, size, "malloc", "user");
+		return NULL;
+	}
 	auto def_guard = make_scoped_guard([=] { free(user); });
-	user->uid = tuple_field_u32_xc(tuple, BOX_USER_FIELD_ID);
-	user->owner = tuple_field_u32_xc(tuple, BOX_USER_FIELD_UID);
-	const char *user_type =
-		tuple_field_cstr_xc(tuple, BOX_USER_FIELD_TYPE);
-	user->type= schema_object_type(user_type);
+	const char *user_type;
+	if (tuple_field_u32(tuple, BOX_USER_FIELD_ID, &(user->uid)) != 0)
+		return NULL;
+	if (tuple_field_u32(tuple, BOX_USER_FIELD_UID, &(user->owner)) != 0)
+		return NULL;
+	user_type = tuple_field_cstr(tuple, BOX_USER_FIELD_TYPE);
+	if (user_type == NULL)
+		return NULL;
+	user->type = schema_object_type(user_type);
 	memcpy(user->name, name, name_len);
 	user->name[name_len] = 0;
 	if (user->type != SC_ROLE && user->type != SC_USER) {
-		tnt_raise(ClientError, ER_CREATE_USER,
-			  user->name, "unknown user type");
+		diag_set(ClientError, ER_CREATE_USER,
+			 user->name, "unknown user type");
+		return NULL;
 	}
 	if (identifier_check(user->name, name_len) != 0)
-		diag_raise();
+		return NULL;
 	/*
 	 * AUTH_DATA field in _user space should contain
 	 * chap-sha1 -> base64_encode(sha1(sha1(password), 0).
@@ -2740,11 +2771,12 @@ user_def_new_from_tuple(struct tuple *tuple)
 		} else {
 			is_auth_empty = false;
 		}
-		if (!is_auth_empty && user->type == SC_ROLE)
-			tnt_raise(ClientError, ER_CREATE_ROLE, user->name,
-				  "authentication data can not be set for a "\
+		if (!is_auth_empty && user->type == SC_ROLE) {
+			diag_set(ClientError, ER_CREATE_ROLE, user->name,
+				 "authentication data can not be set for a "\
 				  "role");
-		user_def_fill_auth_data(user, auth_data);
+			return NULL;
+		}
 		if (user_def_fill_auth_data(user, auth_data) != 0)
 			return NULL;
 	}
@@ -2886,39 +2918,53 @@ func_def_new_from_tuple(struct tuple *tuple)
 	uint32_t field_count = tuple_field_count(tuple);
 	uint32_t name_len, body_len, comment_len;
 	const char *name, *body, *comment;
-	name = tuple_field_str_xc(tuple, BOX_FUNC_FIELD_NAME, &name_len);
+	name = tuple_field_str(tuple, BOX_FUNC_FIELD_NAME, &name_len);
+	if (name == NULL)
+		return NULL;
 	if (name_len > BOX_NAME_MAX) {
-		tnt_raise(ClientError, ER_CREATE_FUNCTION,
-			  tt_cstr(name, BOX_INVALID_NAME_MAX),
-			  "function name is too long");
+		diag_set(ClientError, ER_CREATE_FUNCTION,
+			 tt_cstr(name, BOX_INVALID_NAME_MAX),
+			 "function name is too long");
+		return NULL;
 	}
 	if (identifier_check(name, name_len) != 0)
-		diag_raise();
+		return NULL;
 	if (field_count > BOX_FUNC_FIELD_BODY) {
-		body = tuple_field_str_xc(tuple, BOX_FUNC_FIELD_BODY,
-					  &body_len);
-		comment = tuple_field_str_xc(tuple, BOX_FUNC_FIELD_COMMENT,
-					     &comment_len);
+		body = tuple_field_str(tuple, BOX_FUNC_FIELD_BODY, &body_len);
+		if (body == NULL)
+			return NULL;
+		comment = tuple_field_str(tuple, BOX_FUNC_FIELD_COMMENT,
+					  &comment_len);
+		if (comment == NULL)
+			return NULL;
 		uint32_t len;
-		const char *routine_type = tuple_field_str_xc(tuple,
-					BOX_FUNC_FIELD_ROUTINE_TYPE, &len);
+		const char *routine_type = tuple_field_str(tuple,
+							   BOX_FUNC_FIELD_ROUTINE_TYPE, &len);
+		if (routine_type == NULL)
+			return NULL;
 		if (len != strlen("function") ||
 		    strncasecmp(routine_type, "function", len) != 0) {
-			tnt_raise(ClientError, ER_CREATE_FUNCTION, name,
-				  "unsupported routine_type value");
+			diag_set(ClientError, ER_CREATE_FUNCTION, name,
+				 "unsupported routine_type value");
+			return NULL;
 		}
-		const char *sql_data_access = tuple_field_str_xc(tuple,
-					BOX_FUNC_FIELD_SQL_DATA_ACCESS, &len);
+		const char *sql_data_access = tuple_field_str(tuple,
+							      BOX_FUNC_FIELD_SQL_DATA_ACCESS, &len);
+		if (sql_data_access == NULL)
+			return NULL;
 		if (len != strlen("none") ||
 		    strncasecmp(sql_data_access, "none", len) != 0) {
-			tnt_raise(ClientError, ER_CREATE_FUNCTION, name,
-				  "unsupported sql_data_access value");
+			diag_set(ClientError, ER_CREATE_FUNCTION, name,
+				 "unsupported sql_data_access value");
+			return NULL;
 		}
-		bool is_null_call = tuple_field_bool_xc(tuple,
-						BOX_FUNC_FIELD_IS_NULL_CALL);
+		bool is_null_call;
+		if (tuple_field_bool(tuple, BOX_FUNC_FIELD_IS_NULL_CALL, &is_null_call) != 0)
+			return NULL;
 		if (is_null_call != true) {
-			tnt_raise(ClientError, ER_CREATE_FUNCTION, name,
-				  "unsupported is_null_call value");
+			diag_set(ClientError, ER_CREATE_FUNCTION, name,
+				 "unsupported is_null_call value");
+			return NULL;
 		}
 	} else {
 		body = NULL;
@@ -2960,84 +3006,103 @@ func_def_new_from_tuple(struct tuple *tuple)
 	} else {
 		def->comment = NULL;
 	}
-	if (field_count > BOX_FUNC_FIELD_SETUID)
-		def->setuid = tuple_field_u32_xc(tuple, BOX_FUNC_FIELD_SETUID);
-	else
+	if (field_count > BOX_FUNC_FIELD_SETUID) {
+		uint32_t out;
+		if (tuple_field_u32(tuple, BOX_FUNC_FIELD_SETUID, &out) != 0)
+			return NULL;
+		def->setuid = out;
+	} else {
 		def->setuid = false;
+	}
 	if (field_count > BOX_FUNC_FIELD_LANGUAGE) {
 		const char *language =
-			tuple_field_cstr_xc(tuple, BOX_FUNC_FIELD_LANGUAGE);
+			tuple_field_cstr(tuple, BOX_FUNC_FIELD_LANGUAGE);
+		if (language == NULL)
+			return NULL;
 		def->language = STR2ENUM(func_language, language);
 		if (def->language == func_language_MAX ||
 		    def->language == FUNC_LANGUAGE_SQL) {
-			tnt_raise(ClientError, ER_FUNCTION_LANGUAGE,
-				  language, def->name);
+			diag_set(ClientError, ER_FUNCTION_LANGUAGE,
+				 language, def->name);
+			return NULL;
 		}
 	} else {
 		/* Lua is the default. */
 		def->language = FUNC_LANGUAGE_LUA;
 	}
 	if (field_count > BOX_FUNC_FIELD_BODY) {
-		def->is_deterministic =
-			tuple_field_bool_xc(tuple,
-					    BOX_FUNC_FIELD_IS_DETERMINISTIC);
-		def->is_sandboxed =
-			tuple_field_bool_xc(tuple,
-					    BOX_FUNC_FIELD_IS_SANDBOXED);
+		if (tuple_field_bool(tuple,BOX_FUNC_FIELD_IS_DETERMINISTIC,
+				     &(def->is_deterministic)) != 0)
+			return NULL;
+		if (tuple_field_bool(tuple,BOX_FUNC_FIELD_IS_SANDBOXED,
+				     &(def->is_sandboxed)) != 0)
+			return NULL;
 		const char *returns =
-			tuple_field_cstr_xc(tuple, BOX_FUNC_FIELD_RETURNS);
+			tuple_field_cstr(tuple, BOX_FUNC_FIELD_RETURNS);
+		if (returns == NULL)
+			return NULL;
 		def->returns = STR2ENUM(field_type, returns);
 		if (def->returns == field_type_MAX) {
-			tnt_raise(ClientError, ER_CREATE_FUNCTION,
-				  def->name, "invalid returns value");
+			diag_set(ClientError, ER_CREATE_FUNCTION,
+				 def->name, "invalid returns value");
+			return NULL;
 		}
 		def->exports.all = 0;
-		const char *exports =
-			tuple_field_with_type_xc(tuple, BOX_FUNC_FIELD_EXPORTS,
-						 MP_ARRAY);
+		const char *exports = tuple_field_with_type(tuple,
+							    BOX_FUNC_FIELD_EXPORTS, MP_ARRAY);
+		if (exports == NULL)
+			return NULL;
 		uint32_t cnt = mp_decode_array(&exports);
 		for (uint32_t i = 0; i < cnt; i++) {
-			 if (mp_typeof(*exports) != MP_STR) {
-				tnt_raise(ClientError, ER_FIELD_TYPE,
-					  int2str(BOX_FUNC_FIELD_EXPORTS + 1),
-					  mp_type_strs[MP_STR]);
+			if (mp_typeof(*exports) != MP_STR) {
+				diag_set(ClientError, ER_FIELD_TYPE,
+					 int2str(BOX_FUNC_FIELD_EXPORTS + 1),
+					 mp_type_strs[MP_STR]);
+				return NULL;
 			}
 			uint32_t len;
 			const char *str = mp_decode_str(&exports, &len);
 			switch (STRN2ENUM(func_language, str, len)) {
-			case FUNC_LANGUAGE_LUA:
-				def->exports.lua = true;
-				break;
-			case FUNC_LANGUAGE_SQL:
-				def->exports.sql = true;
-				break;
-			default:
-				tnt_raise(ClientError, ER_CREATE_FUNCTION,
-					  def->name, "invalid exports value");
+				case FUNC_LANGUAGE_LUA:
+					def->exports.lua = true;
+					break;
+				case FUNC_LANGUAGE_SQL:
+					def->exports.sql = true;
+					break;
+				default:
+					diag_set(ClientError, ER_CREATE_FUNCTION,
+						 def->name, "invalid exports value");
+					return NULL;
 			}
 		}
 		const char *aggregate =
-			tuple_field_cstr_xc(tuple, BOX_FUNC_FIELD_AGGREGATE);
+			tuple_field_cstr(tuple, BOX_FUNC_FIELD_AGGREGATE);
+		if (aggregate == NULL)
+			return NULL;
 		def->aggregate = STR2ENUM(func_aggregate, aggregate);
 		if (def->aggregate == func_aggregate_MAX) {
-			tnt_raise(ClientError, ER_CREATE_FUNCTION,
-				  def->name, "invalid aggregate value");
+			diag_set(ClientError, ER_CREATE_FUNCTION,
+				 def->name, "invalid aggregate value");
+			return NULL;
 		}
-		const char *param_list =
-			tuple_field_with_type_xc(tuple,
-					BOX_FUNC_FIELD_PARAM_LIST, MP_ARRAY);
+		const char *param_list = tuple_field_with_type(tuple,
+							       BOX_FUNC_FIELD_PARAM_LIST, MP_ARRAY);
+		if (param_list == NULL)
+			return NULL;
 		uint32_t argc = mp_decode_array(&param_list);
 		for (uint32_t i = 0; i < argc; i++) {
-			 if (mp_typeof(*param_list) != MP_STR) {
-				tnt_raise(ClientError, ER_FIELD_TYPE,
-					  int2str(BOX_FUNC_FIELD_PARAM_LIST + 1),
-					  mp_type_strs[MP_STR]);
+			if (mp_typeof(*param_list) != MP_STR) {
+				diag_set(ClientError, ER_FIELD_TYPE,
+					 int2str(BOX_FUNC_FIELD_PARAM_LIST + 1),
+					 mp_type_strs[MP_STR]);
+				return NULL;
 			}
 			uint32_t len;
 			const char *str = mp_decode_str(&param_list, &len);
 			if (STRN2ENUM(field_type, str, len) == field_type_MAX) {
-				tnt_raise(ClientError, ER_CREATE_FUNCTION,
-					  def->name, "invalid argument type");
+				diag_set(ClientError, ER_CREATE_FUNCTION,
+					 def->name, "invalid argument type");
+				return NULL;
 			}
 		}
 		def->param_count = argc;
@@ -3045,7 +3110,7 @@ func_def_new_from_tuple(struct tuple *tuple)
 		if (opts_decode(&def->opts, func_opts_reg, &opts,
 				ER_WRONG_SPACE_OPTIONS, BOX_FUNC_FIELD_OPTS,
 				NULL) != 0)
-			diag_raise();
+			return NULL;
 	} else {
 		def->is_deterministic = false;
 		def->is_sandboxed = false;
@@ -3057,7 +3122,7 @@ func_def_new_from_tuple(struct tuple *tuple)
 		def->param_count = 0;
 	}
 	if (func_def_check(def) != 0)
-		diag_raise();
+		return NULL;
 	def_guard.is_active = false;
 	return def;
 }
@@ -3200,43 +3265,59 @@ coll_id_def_new_from_tuple(struct tuple *tuple, struct coll_id_def *def)
 {
 	memset(def, 0, sizeof(*def));
 	uint32_t name_len, locale_len, type_len;
-	def->id = tuple_field_u32_xc(tuple, BOX_COLLATION_FIELD_ID);
-	def->name = tuple_field_str_xc(tuple, BOX_COLLATION_FIELD_NAME, &name_len);
+	if (tuple_field_u32(tuple, BOX_COLLATION_FIELD_ID, &(def->id)) != 0)
+		return -1;
+	def->name = tuple_field_str(tuple, BOX_COLLATION_FIELD_NAME, &name_len);
+	if (def->name == NULL)
+		return -1;
 	def->name_len = name_len;
-	if (name_len > BOX_NAME_MAX)
-		tnt_raise(ClientError, ER_CANT_CREATE_COLLATION,
-			  "collation name is too long");
+	if (name_len > BOX_NAME_MAX) {
+		diag_set(ClientError, ER_CANT_CREATE_COLLATION,
+			 "collation name is too long");
+		return -1;
+	}
+	struct coll_def *base;
+	const char *type;
 	if (identifier_check(def->name, name_len) != 0)
-		diag_raise();
+		return -1;
+	if (tuple_field_u32(tuple, BOX_COLLATION_FIELD_UID, &(def->owner_id)) != 0)
+		return -1;
+	base = &def->base;
+	type = tuple_field_str(tuple, BOX_COLLATION_FIELD_TYPE,
+			       &type_len);
+	if (type == NULL)
+		return -1;
 
-	def->owner_id = tuple_field_u32_xc(tuple, BOX_COLLATION_FIELD_UID);
-	struct coll_def *base = &def->base;
-	const char *type = tuple_field_str_xc(tuple, BOX_COLLATION_FIELD_TYPE,
-					      &type_len);
 	base->type = STRN2ENUM(coll_type, type, type_len);
-	if (base->type == coll_type_MAX)
-		tnt_raise(ClientError, ER_CANT_CREATE_COLLATION,
-			  "unknown collation type");
-	const char *locale =
-		tuple_field_str_xc(tuple, BOX_COLLATION_FIELD_LOCALE,
-				   &locale_len);
-	if (locale_len > COLL_LOCALE_LEN_MAX)
-		tnt_raise(ClientError, ER_CANT_CREATE_COLLATION,
-			  "collation locale is too long");
+	if (base->type == coll_type_MAX) {
+		diag_set(ClientError, ER_CANT_CREATE_COLLATION,
+			 "unknown collation type");
+		return -1;
+	}
+	const char *locale = tuple_field_str(tuple, BOX_COLLATION_FIELD_LOCALE,
+					     &locale_len);
+	if (locale == NULL)
+		return -1;
+	if (locale_len > COLL_LOCALE_LEN_MAX) {
+		diag_set(ClientError, ER_CANT_CREATE_COLLATION,
+			 "collation locale is too long");
+		return -1;
+	}
+	const char *options;
 	if (locale_len > 0)
 		if (identifier_check(locale, locale_len) != 0)
-			diag_raise();
+			return -1;
 	snprintf(base->locale, sizeof(base->locale), "%.*s", locale_len,
 		 locale);
-	const char *options =
-		tuple_field_with_type_xc(tuple, BOX_COLLATION_FIELD_OPTIONS,
-					 MP_MAP);
-
+	options = tuple_field_with_type(tuple,
+					BOX_COLLATION_FIELD_OPTIONS,MP_MAP);
+	if (options == NULL)
+		return -1;
 	if (opts_decode(&base->icu, coll_icu_opts_reg, &options,
 			ER_WRONG_COLLATION_OPTIONS,
-			BOX_COLLATION_FIELD_OPTIONS, NULL) != 0)
-		diag_raise();
-
+			BOX_COLLATION_FIELD_OPTIONS, NULL) != 0) {
+		return -1;
+	}
 	if (base->icu.french_collation == coll_icu_on_off_MAX) {
 		tnt_raise(ClientError, ER_CANT_CREATE_COLLATION,
 			  "ICU wrong french_collation option setting, "
@@ -3895,39 +3976,58 @@ static struct sequence_def *
 sequence_def_new_from_tuple(struct tuple *tuple, uint32_t errcode)
 {
 	uint32_t name_len;
-	const char *name = tuple_field_str_xc(tuple, BOX_USER_FIELD_NAME,
-					      &name_len);
+	const char *name = tuple_field_str(tuple, BOX_USER_FIELD_NAME,
+					   &name_len);
+	if (name == NULL)
+		return NULL;
 	if (name_len > BOX_NAME_MAX) {
-		tnt_raise(ClientError, errcode,
-			  tt_cstr(name, BOX_INVALID_NAME_MAX),
-			  "sequence name is too long");
+		diag_set(ClientError, errcode,
+			 tt_cstr(name, BOX_INVALID_NAME_MAX),
+			 "sequence name is too long");
+		return NULL;
 	}
 	if (identifier_check(name, name_len) != 0)
-		diag_raise();
+		return NULL;
 	size_t sz = sequence_def_sizeof(name_len);
 	struct sequence_def *def = (struct sequence_def *) malloc(sz);
-	if (def == NULL)
-		tnt_raise(OutOfMemory, sz, "malloc", "sequence");
+	if (def == NULL) {
+		diag_set(OutOfMemory, sz, "malloc", "sequence");
+		return NULL;
+	}
 	auto def_guard = make_scoped_guard([=] { free(def); });
 	memcpy(def->name, name, name_len);
 	def->name[name_len] = '\0';
-	def->id = tuple_field_u32_xc(tuple, BOX_SEQUENCE_FIELD_ID);
-	def->uid = tuple_field_u32_xc(tuple, BOX_SEQUENCE_FIELD_UID);
-	def->step = tuple_field_i64_xc(tuple, BOX_SEQUENCE_FIELD_STEP);
-	def->min = tuple_field_i64_xc(tuple, BOX_SEQUENCE_FIELD_MIN);
-	def->max = tuple_field_i64_xc(tuple, BOX_SEQUENCE_FIELD_MAX);
-	def->start = tuple_field_i64_xc(tuple, BOX_SEQUENCE_FIELD_START);
-	def->cache = tuple_field_i64_xc(tuple, BOX_SEQUENCE_FIELD_CACHE);
-	def->cycle = tuple_field_bool_xc(tuple, BOX_SEQUENCE_FIELD_CYCLE);
-	if (def->step == 0)
-		tnt_raise(ClientError, errcode, def->name,
-			  "step option must be non-zero");
-	if (def->min > def->max)
-		tnt_raise(ClientError, errcode, def->name,
-			  "max must be greater than or equal to min");
-	if (def->start < def->min || def->start > def->max)
-		tnt_raise(ClientError, errcode, def->name,
-			  "start must be between min and max");
+	if (tuple_field_u32(tuple, BOX_SEQUENCE_FIELD_ID, &(def->id)) != 0)
+		return NULL;
+	if (tuple_field_u32(tuple, BOX_SEQUENCE_FIELD_UID, &(def->uid)) != 0)
+		return NULL;
+	if (tuple_field_i64(tuple, BOX_SEQUENCE_FIELD_STEP, &(def->step)) != 0)
+		return NULL;
+	if (tuple_field_i64(tuple, BOX_SEQUENCE_FIELD_MIN, &(def->min)) != 0)
+		return NULL;
+	if (tuple_field_i64(tuple, BOX_SEQUENCE_FIELD_MAX, &(def->max)) != 0)
+		return NULL;
+	if (tuple_field_i64(tuple, BOX_SEQUENCE_FIELD_START, &(def->start)) != 0)
+		return NULL;
+	if (tuple_field_i64(tuple, BOX_SEQUENCE_FIELD_CACHE, &(def->cache)) != 0)
+		return NULL;
+	if (tuple_field_bool(tuple, BOX_SEQUENCE_FIELD_CYCLE, &(def->cycle)) != 0)
+		return NULL;
+	if (def->step == 0) {
+		diag_set(ClientError, errcode, def->name,
+			 "step option must be non-zero");
+		return NULL;
+	}
+	if (def->min > def->max) {
+		diag_set(ClientError, errcode, def->name,
+			 "max must be greater than or equal to min");
+		return NULL;
+	}
+	if (def->start < def->min || def->start > def->max) {
+		diag_set(ClientError, errcode, def->name,
+			 "start must be between min and max");
+		return NULL;
+	}
 	def_guard.is_active = false;
 	return def;
 }
@@ -4207,8 +4307,8 @@ set_space_sequence(struct trigger *trigger, void * /* event */)
 	if (tuple_field_u32(tuple, BOX_SPACE_SEQUENCE_FIELD_SEQUENCE_ID, &sequence_id) != 0)
 		return -1;
 	bool is_generated;
-	if (tuple_field_bool(tuple, BOX_SPACE_SEQUENCE_FIELD_IS_GENERATED,
-		&is_generated) != 0)
+	if (tuple_field_bool(tuple,BOX_SPACE_SEQUENCE_FIELD_IS_GENERATED,
+			     &is_generated) != 0)
 		return -1;
 	struct space *space = space_by_id(space_id);
 	assert(space != NULL);
@@ -4540,38 +4640,45 @@ decode_fk_links(struct tuple *tuple, uint32_t *out_count,
 		const char *constraint_name, uint32_t constraint_len,
 		uint32_t errcode)
 {
-	const char *parent_cols =
-		tuple_field_with_type_xc(tuple,
-					 BOX_FK_CONSTRAINT_FIELD_PARENT_COLS,
-					 MP_ARRAY);
+	const char *parent_cols = tuple_field_with_type(tuple,
+							BOX_FK_CONSTRAINT_FIELD_PARENT_COLS, MP_ARRAY);
+	if (parent_cols == NULL)
+		return NULL;
 	uint32_t count = mp_decode_array(&parent_cols);
 	if (count == 0) {
-		tnt_raise(ClientError, errcode,
-			  tt_cstr(constraint_name, constraint_len),
-			  "at least one link must be specified");
+		diag_set(ClientError, errcode,
+			 tt_cstr(constraint_name, constraint_len),
+			 "at least one link must be specified");
+		return NULL;
 	}
-	const char *child_cols =
-		tuple_field_with_type_xc(tuple,
-					 BOX_FK_CONSTRAINT_FIELD_CHILD_COLS,
-					 MP_ARRAY);
+	const char *child_cols = tuple_field_with_type(tuple,
+						       BOX_FK_CONSTRAINT_FIELD_CHILD_COLS, MP_ARRAY);
+	if (child_cols == NULL)
+		return NULL;
 	if (mp_decode_array(&child_cols) != count) {
-		tnt_raise(ClientError, errcode,
-			  tt_cstr(constraint_name, constraint_len),
-			  "number of referenced and referencing fields "
-			  "must be the same");
+		diag_set(ClientError, errcode,
+			 tt_cstr(constraint_name, constraint_len),
+			 "number of referenced and referencing fields "
+			 "must be the same");
+		return NULL;
 	}
 	*out_count = count;
 	size_t size = count * sizeof(struct field_link);
 	struct field_link *region_links =
-		(struct field_link *) region_alloc_xc(&fiber()->gc, size);
+		(struct field_link *)region_alloc(&fiber()->gc, size);
+	if (region_links == NULL) {
+		diag_set(OutOfMemory, size, "region", "new slab");
+		return NULL;
+	}
 	memset(region_links, 0, size);
 	for (uint32_t i = 0; i < count; ++i) {
 		if (mp_typeof(*parent_cols) != MP_UINT ||
 		    mp_typeof(*child_cols) != MP_UINT) {
-			tnt_raise(ClientError, errcode,
-				  tt_cstr(constraint_name, constraint_len),
-				  tt_sprintf("value of %d link is not unsigned",
-					     i));
+			diag_set(ClientError, errcode,
+				 tt_cstr(constraint_name, constraint_len),
+				 tt_sprintf("value of %d link is not unsigned",
+					    i));
+			return NULL;
 		}
 		region_links[i].parent_field = mp_decode_uint(&parent_cols);
 		region_links[i].child_field = mp_decode_uint(&child_cols);
@@ -4584,16 +4691,17 @@ static struct fk_constraint_def *
 fk_constraint_def_new_from_tuple(struct tuple *tuple, uint32_t errcode)
 {
 	uint32_t name_len;
-	const char *name =
-		tuple_field_str_xc(tuple, BOX_FK_CONSTRAINT_FIELD_NAME,
-				   &name_len);
+	const char *name = tuple_field_str(tuple, BOX_FK_CONSTRAINT_FIELD_NAME, &name_len);
+	if (name == NULL)
+		return NULL;
 	if (name_len > BOX_NAME_MAX) {
-		tnt_raise(ClientError, errcode,
-			  tt_cstr(name, BOX_INVALID_NAME_MAX),
-			  "constraint name is too long");
+		diag_set(ClientError, errcode,
+			 tt_cstr(name, BOX_INVALID_NAME_MAX),
+			 "constraint name is too long");
+		return NULL;
 	}
 	if (identifier_check(name, name_len) != 0)
-		diag_raise();
+		return NULL;
 	uint32_t link_count;
 	struct field_link *links = decode_fk_links(tuple, &link_count, name,
 						   name_len, errcode);
@@ -4614,37 +4722,44 @@ fk_constraint_def_new_from_tuple(struct tuple *tuple, uint32_t errcode)
 					      name_len + 1);
 	memcpy(fk_def->links, links, link_count * sizeof(struct field_link));
 	fk_def->field_count = link_count;
-	fk_def->child_id = tuple_field_u32_xc(tuple,
-					      BOX_FK_CONSTRAINT_FIELD_CHILD_ID);
-	fk_def->parent_id =
-		tuple_field_u32_xc(tuple, BOX_FK_CONSTRAINT_FIELD_PARENT_ID);
-	fk_def->is_deferred =
-		tuple_field_bool_xc(tuple, BOX_FK_CONSTRAINT_FIELD_DEFERRED);
-	const char *match = tuple_field_str_xc(tuple,
-					       BOX_FK_CONSTRAINT_FIELD_MATCH,
-					       &name_len);
+	if (tuple_field_u32(tuple, BOX_FK_CONSTRAINT_FIELD_CHILD_ID,
+			    &(fk_def->child_id )) != 0)
+		return NULL;
+	if (tuple_field_u32(tuple, BOX_FK_CONSTRAINT_FIELD_PARENT_ID, &(fk_def->parent_id)) != 0)
+		return NULL;
+	if (tuple_field_bool(tuple, BOX_FK_CONSTRAINT_FIELD_DEFERRED, &(fk_def->is_deferred)) != 0)
+		return NULL;
+	const char *match = tuple_field_str(tuple,
+					    BOX_FK_CONSTRAINT_FIELD_MATCH, &name_len);
+	if (match == NULL)
+		return NULL;
 	fk_def->match = STRN2ENUM(fk_constraint_match, match, name_len);
 	if (fk_def->match == fk_constraint_match_MAX) {
-		tnt_raise(ClientError, errcode, fk_def->name,
-			  "unknown MATCH clause");
+		diag_set(ClientError, errcode, fk_def->name,
+			 "unknown MATCH clause");
+		return NULL;
 	}
-	const char *on_delete_action =
-		tuple_field_str_xc(tuple, BOX_FK_CONSTRAINT_FIELD_ON_DELETE,
-				   &name_len);
+	const char *on_delete_action = tuple_field_str(tuple,
+						       BOX_FK_CONSTRAINT_FIELD_ON_DELETE, &name_len);
+	if (on_delete_action == NULL)
+		return NULL;
 	fk_def->on_delete = STRN2ENUM(fk_constraint_action,
 				      on_delete_action, name_len);
 	if (fk_def->on_delete == fk_constraint_action_MAX) {
-		tnt_raise(ClientError, errcode, fk_def->name,
-			  "unknown ON DELETE action");
+		diag_set(ClientError, errcode, fk_def->name,
+			 "unknown ON DELETE action");
+		return NULL;
 	}
-	const char *on_update_action =
-		tuple_field_str_xc(tuple, BOX_FK_CONSTRAINT_FIELD_ON_UPDATE,
-				   &name_len);
+	const char *on_update_action = tuple_field_str(tuple,
+						       BOX_FK_CONSTRAINT_FIELD_ON_UPDATE, &name_len);
+	if (on_update_action == NULL)
+		return NULL;
 	fk_def->on_update = STRN2ENUM(fk_constraint_action,
 				      on_update_action, name_len);
 	if (fk_def->on_update == fk_constraint_action_MAX) {
-		tnt_raise(ClientError, errcode, fk_def->name,
-			  "unknown ON UPDATE action");
+		diag_set(ClientError, errcode, fk_def->name,
+			 "unknown ON UPDATE action");
+		return NULL;
 	}
 	def_guard.is_active = false;
 	return fk_def;
@@ -5016,35 +5131,38 @@ static struct ck_constraint_def *
 ck_constraint_def_new_from_tuple(struct tuple *tuple)
 {
 	uint32_t name_len;
-	const char *name =
-		tuple_field_str_xc(tuple, BOX_CK_CONSTRAINT_FIELD_NAME,
-				   &name_len);
+	const char *name = tuple_field_str(tuple, BOX_CK_CONSTRAINT_FIELD_NAME, &name_len);
+	if (name == NULL)
+		return NULL;
 	if (name_len > BOX_NAME_MAX) {
-		tnt_raise(ClientError, ER_CREATE_CK_CONSTRAINT,
-			  tt_cstr(name, BOX_INVALID_NAME_MAX),
-				  "check constraint name is too long");
+		diag_set(ClientError, ER_CREATE_CK_CONSTRAINT,
+			 tt_cstr(name, BOX_INVALID_NAME_MAX),
+			 "check constraint name is too long");
+		return NULL;
 	}
 	if (identifier_check(name, name_len) != 0)
-		diag_raise();
-	uint32_t space_id =
-		tuple_field_u32_xc(tuple, BOX_CK_CONSTRAINT_FIELD_SPACE_ID);
-	const char *language_str =
-		tuple_field_cstr_xc(tuple, BOX_CK_CONSTRAINT_FIELD_LANGUAGE);
+		return NULL;
+	uint32_t space_id;
+	if (tuple_field_u32(tuple, BOX_CK_CONSTRAINT_FIELD_SPACE_ID, &space_id) != 0)
+		return NULL;
+	const char *language_str = tuple_field_cstr(tuple, BOX_CK_CONSTRAINT_FIELD_LANGUAGE);
+	if (language_str == NULL)
+		return NULL;
 	enum ck_constraint_language language =
 		STR2ENUM(ck_constraint_language, language_str);
 	if (language == ck_constraint_language_MAX) {
-		tnt_raise(ClientError, ER_FUNCTION_LANGUAGE, language_str,
-			  tt_cstr(name, name_len));
+		diag_set(ClientError, ER_FUNCTION_LANGUAGE, language_str,
+			 tt_cstr(name, name_len));
+		return NULL;
 	}
 	uint32_t expr_str_len;
-	const char *expr_str =
-		tuple_field_str_xc(tuple, BOX_CK_CONSTRAINT_FIELD_CODE,
-				   &expr_str_len);
+	const char *expr_str = tuple_field_str(tuple,
+					       BOX_CK_CONSTRAINT_FIELD_CODE, &expr_str_len);
+	if (expr_str == NULL)
+		return NULL;
 	struct ck_constraint_def *ck_def =
 		ck_constraint_def_new(name, name_len, expr_str, expr_str_len,
 				      space_id, language);
-	if (ck_def == NULL)
-		diag_raise();
 	return ck_def;
 }
 
@@ -5126,10 +5244,13 @@ on_replace_dd_ck_constraint(struct trigger * /* trigger*/, void *event)
 	struct txn_stmt *stmt = txn_current_stmt(txn);
 	struct tuple *old_tuple = stmt->old_tuple;
 	struct tuple *new_tuple = stmt->new_tuple;
-	uint32_t space_id =
-		tuple_field_u32_xc(old_tuple != NULL ? old_tuple : new_tuple,
-				   BOX_CK_CONSTRAINT_FIELD_SPACE_ID);
-	struct space *space = space_cache_find_xc(space_id);
+	uint32_t space_id;
+	if (tuple_field_u32(old_tuple != NULL ? old_tuple : new_tuple,
+			    BOX_CK_CONSTRAINT_FIELD_SPACE_ID, &space_id) != 0)
+		return -1;
+	struct space *space = space_cache_find(space_id);
+	if (space == NULL)
+		return -1;
 	struct trigger *on_rollback = txn_alter_trigger_new(NULL, NULL);
 	struct trigger *on_commit = txn_alter_trigger_new(NULL, NULL);
 	if (on_commit == NULL || on_rollback == NULL)

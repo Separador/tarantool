@@ -1095,47 +1095,6 @@ tuple_to_buf(struct tuple *tuple, char *buf, size_t size);
 #include "tuple_update.h"
 #include "errinj.h"
 
-/* @copydoc tuple_field_with_type() */
-static inline const char *
-tuple_field_with_type_xc(struct tuple *tuple, uint32_t fieldno,
-		         enum mp_type type)
-{
-	const char *out = tuple_field_with_type(tuple, fieldno, type);
-	if (out == NULL)
-		diag_raise();
-	return out;
-}
-
-/* @copydoc tuple_field_bool() */
-static inline bool
-tuple_field_bool_xc(struct tuple *tuple, uint32_t fieldno)
-{
-	bool out;
-	if (tuple_field_bool(tuple, fieldno, &out) != 0)
-		diag_raise();
-	return out;
-}
-
-/* @copydoc tuple_field_i64() */
-static inline int64_t
-tuple_field_i64_xc(struct tuple *tuple, uint32_t fieldno)
-{
-	int64_t out;
-	if (tuple_field_i64(tuple, fieldno, &out) != 0)
-		diag_raise();
-	return out;
-}
-
-/* @copydoc tuple_field_u64() */
-static inline uint64_t
-tuple_field_u64_xc(struct tuple *tuple, uint32_t fieldno)
-{
-	uint64_t out;
-	if (tuple_field_u64(tuple, fieldno, &out) != 0)
-		diag_raise();
-	return out;
-}
-
 /* @copydoc tuple_field_u32() */
 static inline uint32_t
 tuple_field_u32_xc(struct tuple *tuple, uint32_t fieldno)
@@ -1144,34 +1103,6 @@ tuple_field_u32_xc(struct tuple *tuple, uint32_t fieldno)
 	if (tuple_field_u32(tuple, fieldno, &out) != 0)
 		diag_raise();
 	return out;
-}
-
-/** @copydoc tuple_field_str() */
-static inline const char *
-tuple_field_str_xc(struct tuple *tuple, uint32_t fieldno, uint32_t *len)
-{
-	const char *ret = tuple_field_str(tuple, fieldno, len);
-	if (ret == NULL)
-		diag_raise();
-	return ret;
-}
-
-/** @copydoc tuple_field_cstr() */
-static inline const char *
-tuple_field_cstr_xc(struct tuple *tuple, uint32_t fieldno)
-{
-	const char *out = tuple_field_cstr(tuple, fieldno);
-	if (out == NULL)
-		diag_raise();
-	return out;
-}
-
-/** @copydoc tuple_field_uuid() */
-static inline void
-tuple_field_uuid_xc(struct tuple *tuple, int fieldno, struct tt_uuid *out)
-{
-	if (tuple_field_uuid(tuple, fieldno, out) != 0)
-		diag_raise();
 }
 
 #endif /* defined(__cplusplus) */
