@@ -100,7 +100,9 @@ access_check_ddl(const char *name, uint32_t object_id, uint32_t owner_uid,
 			return; /* Access granted. */
 	}
 	/* Create a meaningful error message. */
-	struct user *user = user_find_xc(cr->uid);
+	struct user *user = user_find(cr->uid);
+	if (user == NULL)
+		diag_raise();
 	const char *object_name;
 	const char *pname;
 	if (access & PRIV_U) {
@@ -285,7 +287,8 @@ index_def_new_from_tuple(struct tuple *tuple, struct space *space)
 			  tt_cstr(name, BOX_INVALID_NAME_MAX),
 			  space_name(space), "index name is too long");
 	}
-	identifier_check_xc(name, name_len);
+	if (identifier_check(name, name_len) != 0)
+		diag_raise();
 	struct key_def *key_def = NULL;
 	struct key_part_def *part_def = (struct key_part_def *)
 			malloc(sizeof(*part_def) * part_count);
@@ -430,7 +433,8 @@ field_def_decode(struct field_def *field, const char **data,
 			  tt_sprintf("field %d name is too long",
 				     fieldno + TUPLE_INDEX_BASE));
 	}
-	identifier_check_xc(field->name, field_name_len);
+	if (identifier_check(field->name, field_name_len) != 0)
+		diag_raise();
 	if (field->type == field_type_MAX) {
 		tnt_raise(ClientError, errcode, tt_cstr(space_name, name_len),
 			  tt_sprintf("field %d has unknown field type",
@@ -524,7 +528,8 @@ space_def_new_from_tuple(struct tuple *tuple, uint32_t errcode,
 		tnt_raise(ClientError, errcode,
 			  tt_cstr(name, BOX_INVALID_NAME_MAX),
 			  "space name is too long");
-	identifier_check_xc(name, name_len);
+	if (identifier_check(name, name_len) != 0)
+		diag_raise();
 	uint32_t id = tuple_field_u32_xc(tuple, BOX_SPACE_FIELD_ID);
 	if (id > BOX_SPACE_MAX) {
 		tnt_raise(ClientError, errcode, tt_cstr(name, name_len),
@@ -549,7 +554,8 @@ space_def_new_from_tuple(struct tuple *tuple, uint32_t errcode,
 		tnt_raise(ClientError, errcode, tt_cstr(name, name_len),
 			  "space engine name is too long");
 	}
-	identifier_check_xc(engine_name, engine_name_len);
+	if (identifier_check(engine_name, engine_name_len) != 0)
+		diag_raise();
 	struct field_def *fields;
 	uint32_t field_count;
 	/* Check space opts. */
@@ -1986,10 +1992,15 @@ on_replace_dd_space(struct trigger * /* trigger */, void *event)
 				  space_name(old_space),
 				  "the space has indexes");
 		}
-		if (schema_find_grants("space", old_space->def->id)) {
-			tnt_raise(ClientError, ER_DROP_SPACE,
-				  space_name(old_space),
-				  "the space has grants");
+		bool out;
+		if (schema_find_grants("space", old_space->def->id, &out) != 0) {
+			return -1;
+		}
+		if (out) {
+			diag_set(ClientError, ER_DROP_SPACE,
+				 space_name(old_space),
+				 "the space has grants");
+			return -1;
 		}
 		if (space_has_data(BOX_TRUNCATE_ID, 0, old_space->def->id))
 			tnt_raise(ClientError, ER_DROP_SPACE,
@@ -2553,7 +2564,8 @@ user_def_new_from_tuple(struct tuple *tuple)
 		tnt_raise(ClientError, ER_CREATE_USER,
 			  user->name, "unknown user type");
 	}
-	identifier_check_xc(user->name, name_len);
+	if (identifier_check(user->name, name_len) != 0)
+		diag_raise();
 	/*
 	 * AUTH_DATA field in _user space should contain
 	 * chap-sha1 -> base64_encode(sha1(sha1(password), 0).
@@ -2698,7 +2710,8 @@ func_def_new_from_tuple(struct tuple *tuple)
 			  tt_cstr(name, BOX_INVALID_NAME_MAX),
 			  "function name is too long");
 	}
-	identifier_check_xc(name, name_len);
+	if (identifier_check(name, name_len) != 0)
+		diag_raise();
 	if (field_count > BOX_FUNC_FIELD_BODY) {
 		body = tuple_field_str_xc(tuple, BOX_FUNC_FIELD_BODY,
 					  &body_len);
@@ -2933,10 +2946,15 @@ on_replace_dd_func(struct trigger * /* trigger */, void *event)
 		access_check_ddl(old_func->def->name, fid, uid, SC_FUNCTION,
 				 PRIV_D);
 		/* Can only delete func if it has no grants. */
-		if (schema_find_grants("function", old_func->def->fid)) {
-			tnt_raise(ClientError, ER_DROP_FUNCTION,
-				  (unsigned) old_func->def->uid,
-				  "function has grants");
+		bool out;
+		if (schema_find_grants("function", old_func->def->fid, &out) != 0) {
+			return -1;
+		}
+		if (out) {
+			diag_set(ClientError, ER_DROP_FUNCTION,
+				 (unsigned) old_func->def->uid,
+				 "function has grants");
+			return -1;
 		}
 		if (old_func != NULL &&
 		    space_has_data(BOX_FUNC_INDEX_ID, 1, old_func->def->fid)) {
@@ -2985,7 +3003,8 @@ coll_id_def_new_from_tuple(struct tuple *tuple, struct coll_id_def *def)
 	if (name_len > BOX_NAME_MAX)
 		tnt_raise(ClientError, ER_CANT_CREATE_COLLATION,
 			  "collation name is too long");
-	identifier_check_xc(def->name, name_len);
+	if (identifier_check(def->name, name_len) != 0)
+		diag_raise();
 
 	def->owner_id = tuple_field_u32_xc(tuple, BOX_COLLATION_FIELD_UID);
 	struct coll_def *base = &def->base;
@@ -3002,7 +3021,8 @@ coll_id_def_new_from_tuple(struct tuple *tuple, struct coll_id_def *def)
 		tnt_raise(ClientError, ER_CANT_CREATE_COLLATION,
 			  "collation locale is too long");
 	if (locale_len > 0)
-		identifier_check_xc(locale, locale_len);
+		if (identifier_check(locale, locale_len) != 0)
+			diag_raise();
 	snprintf(base->locale, sizeof(base->locale), "%.*s", locale_len,
 		 locale);
 	const char *options =
@@ -3171,20 +3191,25 @@ on_replace_dd_collation(struct trigger * /* trigger */, void *event)
 /**
  * Create a privilege definition from tuple.
  */
-void
+int
 priv_def_create_from_tuple(struct priv_def *priv, struct tuple *tuple)
 {
-	priv->grantor_id = tuple_field_u32_xc(tuple, BOX_PRIV_FIELD_ID);
-	priv->grantee_id = tuple_field_u32_xc(tuple, BOX_PRIV_FIELD_UID);
+	if (tuple_field_u32(tuple, BOX_PRIV_FIELD_ID, &(priv->grantor_id)) != 0)
+		return -1;
+	if (tuple_field_u32(tuple, BOX_PRIV_FIELD_UID, &(priv->grantee_id)) != 0)
+		return -1;
 
 	const char *object_type =
-		tuple_field_cstr_xc(tuple, BOX_PRIV_FIELD_OBJECT_TYPE);
+		tuple_field_cstr(tuple, BOX_PRIV_FIELD_OBJECT_TYPE);
+	if (object_type == NULL)
+		return -1;
 	priv->object_type = schema_object_type(object_type);
 
 	const char *data = tuple_field(tuple, BOX_PRIV_FIELD_OBJECT_ID);
 	if (data == NULL) {
-		tnt_raise(ClientError, ER_NO_SUCH_FIELD_NO,
-			  BOX_PRIV_FIELD_OBJECT_ID + TUPLE_INDEX_BASE);
+		diag_set(ClientError, ER_NO_SUCH_FIELD_NO,
+			 BOX_PRIV_FIELD_OBJECT_ID + TUPLE_INDEX_BASE);
+		return -1;
 	}
 	/*
 	 * When granting or revoking privileges on a whole entity
@@ -3193,23 +3218,28 @@ priv_def_create_from_tuple(struct priv_def *priv, struct tuple *tuple)
 	 * So check for that first.
 	 */
 	switch (mp_typeof(*data)) {
-	case MP_STR:
-		if (mp_decode_strl(&data) == 0) {
-			/* Entity-wide privilege. */
-			priv->object_id = 0;
-			priv->object_type = schema_entity_type(priv->object_type);
-			break;
-		}
-		FALLTHROUGH;
-	default:
-		priv->object_id = tuple_field_u32_xc(tuple,
-						     BOX_PRIV_FIELD_OBJECT_ID);
+		case MP_STR:
+			if (mp_decode_strl(&data) == 0) {
+				/* Entity-wide privilege. */
+				priv->object_id = 0;
+				priv->object_type = schema_entity_type(priv->object_type);
+				break;
+			}
+				FALLTHROUGH;
+		default:
+			if (tuple_field_u32(tuple,BOX_PRIV_FIELD_OBJECT_ID, &(priv->object_id)) != 0)
+				return -1;
 	}
 	if (priv->object_type == SC_UNKNOWN) {
-		tnt_raise(ClientError, ER_UNKNOWN_SCHEMA_OBJECT,
-			  object_type);
+		diag_set(ClientError, ER_UNKNOWN_SCHEMA_OBJECT,
+			 object_type);
+		return -1;
 	}
-	priv->access = tuple_field_u32_xc(tuple, BOX_PRIV_FIELD_ACCESS);
+	uint32_t out;
+	if (tuple_field_u32(tuple, BOX_PRIV_FIELD_ACCESS, &out) != 0)
+		return -1;
+	priv->access = out;
+	return 0;
 }
 
 /*
@@ -3225,7 +3255,9 @@ priv_def_create_from_tuple(struct priv_def *priv, struct tuple *tuple)
 static void
 priv_def_check(struct priv_def *priv, enum priv_type priv_type)
 {
-	struct user *grantor = user_find_xc(priv->grantor_id);
+	struct user *grantor = user_find(priv->grantor_id);
+	if (grantor == NULL)
+		diag_raise();
 	/* May be a role */
 	struct user *grantee = user_by_id(priv->grantee_id);
 	if (grantee == NULL) {
@@ -3259,7 +3291,11 @@ priv_def_check(struct priv_def *priv, enum priv_type priv_type)
 	}
 	case SC_FUNCTION:
 	{
-		struct func *func = func_cache_find(priv->object_id);
+		struct func *func = func_by_id(priv->object_id);
+		if (func == NULL) {
+			diag_set(ClientError, ER_NO_SUCH_FUNCTION, int2str(priv->object_id));
+			diag_raise();
+		}
 		if (func->def->uid != grantor->def->uid &&
 		    grantor->def->uid != ADMIN) {
 			tnt_raise(AccessDeniedError,
@@ -3302,7 +3338,8 @@ priv_def_check(struct priv_def *priv, enum priv_type priv_type)
 				  grantor->def->name);
 		}
 		/* Not necessary to do during revoke, but who cares. */
-		role_check(grantee, role);
+		if (role_check(grantee, role) != 0)
+			diag_raise();
 		break;
 	}
 	case SC_USER:
@@ -3378,7 +3415,8 @@ revoke_priv(struct trigger *trigger, void *event)
 	(void) event;
 	struct tuple *tuple = (struct tuple *)trigger->data;
 	struct priv_def priv;
-	priv_def_create_from_tuple(&priv, tuple);
+	if (priv_def_create_from_tuple(&priv, tuple) != 0)
+		return -1;
 	priv.access = 0;
 	grant_or_revoke(&priv);
 	return 0;
@@ -3391,7 +3429,8 @@ modify_priv(struct trigger *trigger, void *event)
 	(void) event;
 	struct tuple *tuple = (struct tuple *)trigger->data;
 	struct priv_def priv;
-	priv_def_create_from_tuple(&priv, tuple);
+	if (priv_def_create_from_tuple(&priv, tuple) != 0)
+		return -1;
 	grant_or_revoke(&priv);
 	return 0;
 }
@@ -3410,7 +3449,8 @@ on_replace_dd_priv(struct trigger * /* trigger */, void *event)
 	struct priv_def priv;
 
 	if (new_tuple != NULL && old_tuple == NULL) {	/* grant */
-		priv_def_create_from_tuple(&priv, new_tuple);
+		if (priv_def_create_from_tuple(&priv, new_tuple) != 0)
+			return -1;
 		priv_def_check(&priv, PRIV_GRANT);
 		grant_or_revoke(&priv);
 		struct trigger *on_rollback =
@@ -3418,7 +3458,8 @@ on_replace_dd_priv(struct trigger * /* trigger */, void *event)
 		txn_stmt_on_rollback(stmt, on_rollback);
 	} else if (new_tuple == NULL) {                /* revoke */
 		assert(old_tuple);
-		priv_def_create_from_tuple(&priv, old_tuple);
+		if (priv_def_create_from_tuple(&priv, old_tuple) != 0)
+			return -1;
 		priv_def_check(&priv, PRIV_REVOKE);
 		priv.access = 0;
 		grant_or_revoke(&priv);
@@ -3426,7 +3467,8 @@ on_replace_dd_priv(struct trigger * /* trigger */, void *event)
 			txn_alter_trigger_new(modify_priv, old_tuple);
 		txn_stmt_on_rollback(stmt, on_rollback);
 	} else {                                       /* modify */
-		priv_def_create_from_tuple(&priv, new_tuple);
+		if (priv_def_create_from_tuple(&priv, new_tuple) != 0)
+			return -1;
 		priv_def_check(&priv, PRIV_GRANT);
 		grant_or_revoke(&priv);
 		struct trigger *on_rollback =
@@ -3540,7 +3582,8 @@ on_replace_dd_cluster(struct trigger *trigger, void *event)
 		/* Check fields */
 		uint32_t replica_id =
 			tuple_field_u32_xc(new_tuple, BOX_CLUSTER_FIELD_ID);
-		replica_check_id(replica_id);
+		if (replica_check_id(replica_id) != 0)
+			return -1;
 		tt_uuid replica_uuid;
 		tuple_field_uuid_xc(new_tuple, BOX_CLUSTER_FIELD_UUID,
 				    &replica_uuid);
@@ -3575,7 +3618,8 @@ on_replace_dd_cluster(struct trigger *trigger, void *event)
 		assert(old_tuple != NULL);
 		uint32_t replica_id =
 			tuple_field_u32_xc(old_tuple, BOX_CLUSTER_FIELD_ID);
-		replica_check_id(replica_id);
+		if (replica_check_id(replica_id) != 0)
+			return -1;
 
 		struct trigger *on_commit;
 		on_commit = txn_alter_trigger_new(unregister_replica,
@@ -3601,7 +3645,8 @@ sequence_def_new_from_tuple(struct tuple *tuple, uint32_t errcode)
 			  tt_cstr(name, BOX_INVALID_NAME_MAX),
 			  "sequence name is too long");
 	}
-	identifier_check_xc(name, name_len);
+	if (identifier_check(name, name_len) != 0)
+		diag_raise();
 	size_t sz = sequence_def_sizeof(name_len);
 	struct sequence_def *def = (struct sequence_def *) malloc(sz);
 	if (def == NULL)
@@ -3706,7 +3751,9 @@ on_replace_dd_sequence(struct trigger * /* trigger */, void *event)
 				 SC_SEQUENCE, PRIV_C);
 		struct trigger *on_rollback =
 			txn_alter_trigger_new(on_create_sequence_rollback, NULL);
-		seq = sequence_new_xc(new_def);
+		seq = sequence_new(new_def);
+		if (seq == NULL)
+			return -1;
 		sequence_cache_insert(seq);
 		on_rollback->data = seq;
 		txn_stmt_on_rollback(stmt, on_rollback);
@@ -3717,15 +3764,21 @@ on_replace_dd_sequence(struct trigger * /* trigger */, void *event)
 		assert(seq != NULL);
 		access_check_ddl(seq->def->name, seq->def->id, seq->def->uid,
 				 SC_SEQUENCE, PRIV_D);
+		bool out;
 		if (space_has_data(BOX_SEQUENCE_DATA_ID, 0, id))
 			tnt_raise(ClientError, ER_DROP_SEQUENCE,
 				  seq->def->name, "the sequence has data");
 		if (space_has_data(BOX_SPACE_SEQUENCE_ID, 1, id))
 			tnt_raise(ClientError, ER_DROP_SEQUENCE,
 				  seq->def->name, "the sequence is in use");
-		if (schema_find_grants("sequence", seq->def->id))
-			tnt_raise(ClientError, ER_DROP_SEQUENCE,
-				  seq->def->name, "the sequence has grants");
+		if (schema_find_grants("sequence", seq->def->id, &out) != 0) {
+			return -1;
+		}
+		if (out) {
+			diag_set(ClientError, ER_DROP_SEQUENCE,
+				 seq->def->name, "the sequence has grants");
+			return -1;
+		}
 		struct trigger *on_commit =
 			txn_alter_trigger_new(on_drop_sequence_commit, seq);
 		struct trigger *on_rollback =
@@ -4210,7 +4263,8 @@ fk_constraint_def_new_from_tuple(struct tuple *tuple, uint32_t errcode)
 			  tt_cstr(name, BOX_INVALID_NAME_MAX),
 			  "constraint name is too long");
 	}
-	identifier_check_xc(name, name_len);
+	if (identifier_check(name, name_len) != 0)
+		diag_raise();
 	uint32_t link_count;
 	struct field_link *links = decode_fk_links(tuple, &link_count, name,
 						   name_len, errcode);
@@ -4614,7 +4668,8 @@ ck_constraint_def_new_from_tuple(struct tuple *tuple)
 			  tt_cstr(name, BOX_INVALID_NAME_MAX),
 				  "check constraint name is too long");
 	}
-	identifier_check_xc(name, name_len);
+	if (identifier_check(name, name_len) != 0)
+		diag_raise();
 	uint32_t space_id =
 		tuple_field_u32_xc(tuple, BOX_CK_CONSTRAINT_FIELD_SPACE_ID);
 	const char *language_str =
@@ -4819,7 +4874,11 @@ on_replace_dd_func_index(struct trigger *trigger, void *event)
 					BOX_FUNC_INDEX_FUNCTION_ID);
 		space = space_cache_find_xc(space_id);
 		index = index_find_xc(space, index_id);
-		func = func_cache_find(fid);
+		func = func_by_id(fid);
+		if (func == NULL) {
+			diag_set(ClientError, ER_NO_SUCH_FUNCTION, int2str(fid));
+			return -1;
+		}
 		func_index_check_func(func);
 		if (index->def->opts.func_id != func->def->fid) {
 			tnt_raise(ClientError, ER_WRONG_INDEX_OPTIONS, 0,

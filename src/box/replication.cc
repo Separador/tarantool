@@ -114,15 +114,19 @@ replication_free(void)
 	free(replicaset.replica_by_id);
 }
 
-void
+int
 replica_check_id(uint32_t replica_id)
 {
-        if (replica_id == REPLICA_ID_NIL)
-		tnt_raise(ClientError, ER_REPLICA_ID_IS_RESERVED,
-			  (unsigned) replica_id);
-	if (replica_id >= VCLOCK_MAX)
-		tnt_raise(LoggedError, ER_REPLICA_MAX,
-			  (unsigned) replica_id);
+	if (replica_id == REPLICA_ID_NIL) {
+		diag_set(ClientError, ER_REPLICA_ID_IS_RESERVED,
+			 (unsigned) replica_id);
+		return -1;
+	}
+	if (replica_id >= VCLOCK_MAX) {
+		diag_set(ClientError, ER_REPLICA_MAX,
+			 (unsigned) replica_id);
+		return -1;
+	}
 	/*
 	 * It's okay to update the instance id while it is joining to
 	 * a cluster as long as the id is set by the time bootstrap is
@@ -133,9 +137,12 @@ replica_check_id(uint32_t replica_id)
 	 * case it will replay this operation during the final join
 	 * stage.
 	 */
-        if (!replicaset.is_joining && replica_id == instance_id)
-		tnt_raise(ClientError, ER_LOCAL_INSTANCE_ID_IS_READ_ONLY,
-			  (unsigned) replica_id);
+	if (!replicaset.is_joining && replica_id == instance_id) {
+		diag_set(ClientError, ER_LOCAL_INSTANCE_ID_IS_READ_ONLY,
+			 (unsigned) replica_id);
+		return -1;
+	}
+	return 0;
 }
 
 /* Return true if replica doesn't have id, relay and applier */
@@ -154,7 +161,7 @@ static struct replica *
 replica_new(void)
 {
 	struct replica *replica = (struct replica *)
-			malloc(sizeof(struct replica));
+		malloc(sizeof(struct replica));
 	if (replica == NULL) {
 		tnt_raise(OutOfMemory, sizeof(*replica), "malloc",
 			  "struct replica");
@@ -379,22 +386,22 @@ static void
 replica_on_applier_disconnect(struct replica *replica)
 {
 	switch (replica->applier_sync_state) {
-	case APPLIER_SYNC:
-		assert(replicaset.applier.synced > 0);
-		replicaset.applier.synced--;
-		FALLTHROUGH;
-	case APPLIER_CONNECTED:
-		assert(replicaset.applier.connected > 0);
-		replicaset.applier.connected--;
-		break;
-	case APPLIER_LOADING:
-		assert(replicaset.applier.loading > 0);
-		replicaset.applier.loading--;
-		break;
-	case APPLIER_DISCONNECTED:
-		break;
-	default:
-		unreachable();
+		case APPLIER_SYNC:
+			assert(replicaset.applier.synced > 0);
+			replicaset.applier.synced--;
+				FALLTHROUGH;
+		case APPLIER_CONNECTED:
+			assert(replicaset.applier.connected > 0);
+			replicaset.applier.connected--;
+			break;
+		case APPLIER_LOADING:
+			assert(replicaset.applier.loading > 0);
+			replicaset.applier.loading--;
+			break;
+		case APPLIER_DISCONNECTED:
+			break;
+		default:
+			unreachable();
 	}
 	replica->applier_sync_state = replica->applier->state;
 	if (replica->applier_sync_state == APPLIER_LOADING)
@@ -406,7 +413,7 @@ replica_on_applier_state_f(struct trigger *trigger, void *event)
 {
 	(void)event;
 	struct replica *replica = container_of(trigger,
-			struct replica, on_applier_state);
+					       struct replica, on_applier_state);
 	switch (replica->applier->state) {
 		case APPLIER_INITIAL_JOIN:
 			replicaset.is_joining = true;
@@ -465,11 +472,11 @@ replicaset_update(struct applier **appliers, int count)
 	struct applier *applier;
 
 	auto uniq_guard = make_scoped_guard([&]{
-		replica_hash_foreach_safe(&uniq, replica, next) {
-			replica_hash_remove(&uniq, replica);
-			replica_clear_applier(replica);
-			replica_delete(replica);
-		}
+	    replica_hash_foreach_safe(&uniq, replica, next) {
+		    replica_hash_remove(&uniq, replica);
+		    replica_clear_applier(replica);
+		    replica_delete(replica);
+	    }
 	});
 
 	/* Check for duplicate UUID */
@@ -567,37 +574,37 @@ replicaset_update(struct applier **appliers, int count)
  * Replica set configuration state, shared among appliers.
  */
 struct replicaset_connect_state {
-	/** Number of successfully connected appliers. */
-	int connected;
-	/** Number of appliers that failed to connect. */
-	int failed;
-	/** Signaled when an applier connects or stops. */
-	struct fiber_cond wakeup;
+    /** Number of successfully connected appliers. */
+    int connected;
+    /** Number of appliers that failed to connect. */
+    int failed;
+    /** Signaled when an applier connects or stops. */
+    struct fiber_cond wakeup;
 };
 
 struct applier_on_connect {
-	struct trigger base;
-	struct replicaset_connect_state *state;
+    struct trigger base;
+    struct replicaset_connect_state *state;
 };
 
 static int
 applier_on_connect_f(struct trigger *trigger, void *event)
 {
 	struct applier_on_connect *on_connect = container_of(trigger,
-					struct applier_on_connect, base);
+							     struct applier_on_connect, base);
 	struct replicaset_connect_state *state = on_connect->state;
 	struct applier *applier = (struct applier *)event;
 
 	switch (applier->state) {
-	case APPLIER_OFF:
-	case APPLIER_STOPPED:
-		state->failed++;
-		break;
-	case APPLIER_CONNECTED:
-		state->connected++;
-		break;
-	default:
-		return 0;
+		case APPLIER_OFF:
+		case APPLIER_STOPPED:
+			state->failed++;
+			break;
+		case APPLIER_CONNECTED:
+			state->connected++;
+			break;
+		default:
+			return 0;
 	}
 	fiber_cond_signal(&state->wakeup);
 	applier_pause(applier);
@@ -694,7 +701,7 @@ replicaset_connect(struct applier **appliers, int count,
 		goto error;
 	}
 	return;
-error:
+	error:
 	/* Destroy appliers */
 	for (int i = 0; i < count; i++) {
 		trigger_clear(&triggers[i].base);
@@ -725,7 +732,7 @@ replicaset_needs_rejoin(struct replica **master)
 
 		const char *uuid_str = tt_uuid_str(&replica->uuid);
 		const char *addr_str = sio_strfaddr(&applier->addr,
-						applier->addr_len);
+						    applier->addr_len);
 		const char *local_vclock_str = vclock_to_string(&replicaset.vclock);
 		const char *remote_vclock_str = vclock_to_string(&ballot->vclock);
 		const char *gc_vclock_str = vclock_to_string(&ballot->gc_vclock);
@@ -894,7 +901,7 @@ replicaset_round(bool skip_ro)
 		 * the lowest uuid.
 		 */
 		int cmp = vclock_compare(&applier->ballot.vclock,
-				&leader->applier->ballot.vclock);
+					 &leader->applier->ballot.vclock);
 		if (cmp < 0)
 			continue;
 		if (cmp == 0 && tt_uuid_compare(&replica->uuid,

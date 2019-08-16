@@ -339,7 +339,8 @@ user_reload_privs(struct user *user)
 		struct tuple *tuple;
 		while ((tuple = iterator_next_xc(it)) != NULL) {
 			struct priv_def priv;
-			priv_def_create_from_tuple(&priv, tuple);
+			if (priv_def_create_from_tuple(&priv, tuple) != 0)
+				diag_raise();
 			/**
 			 * Skip role grants, we're only
 			 * interested in real objects.
@@ -559,7 +560,7 @@ user_cache_free()
 
 /** {{{ roles */
 
-void
+int
 role_check(struct user *grantee, struct user *role)
 {
 	/*
@@ -592,9 +593,11 @@ role_check(struct user *grantee, struct user *role)
 	 */
 	if (user_map_is_set(&transitive_closure,
 			    role->auth_token)) {
-		tnt_raise(ClientError, ER_ROLE_LOOP,
+		diag_set(ClientError, ER_ROLE_LOOP,
 			  role->def->name, grantee->def->name);
+		return -1;
 	}
+	return 0;
 }
 
 /**
