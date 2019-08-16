@@ -195,7 +195,7 @@ ck_constraint_delete(struct ck_constraint *ck_constraint);
  * pointer to make ck constraint independent of specific space
  * object version.
  *
- * Raises an exception when some ck constraint is unsatisfied.
+ * Returns error code when some ck constraint is unsatisfied.
  * The diag message is set.
  */
 int

@@ -118,7 +118,7 @@ access_check_ddl(const char *name, uint32_t object_id, uint32_t owner_uid,
 }
 
 /**
- * Throw an exception if the given index definition
+ * Return -1 error code if the given index definition
  * is incompatible with a sequence.
  */
 static int
@@ -803,8 +803,15 @@ public:
 static struct trigger *
 txn_alter_trigger_new(trigger_f run, void *data)
 {
+	size_t size = sizeof(struct trigger);
 	struct trigger *trigger = (struct trigger *)
-		region_calloc_object_xc(&in_txn()->region, struct trigger);
+		region_aligned_alloc(&in_txn()->region, size,
+				     alignof(struct trigger));
+	if (trigger == NULL) {
+		diag_set(OutOfMemory, size, "region", "new slab");
+		return NULL;
+	}
+	trigger = (struct trigger *)memset(trigger, 0, size);
 	trigger->run = run;
 	trigger->data = data;
 	trigger->destroy = NULL;
@@ -982,8 +989,13 @@ alter_space_commit(struct trigger *trigger, void *event)
 	 * indexes into their new places.
 	 */
 	class AlterSpaceOp *op;
-	rlist_foreach_entry(op, &alter->ops, link)
-		op->commit(alter, signature);
+	try {
+		rlist_foreach_entry(op, &alter->ops, link) {
+			op->commit(alter, signature);
+		}
+	} catch (Exception *e) {
+		return -1;
+	}
 
 	alter->new_space = NULL; /* for alter_space_delete(). */
 	/*
@@ -1010,8 +1022,12 @@ alter_space_rollback(struct trigger *trigger, void * /* event */)
 	struct alter_space *alter = (struct alter_space *) trigger->data;
 	/* Rollback alter ops */
 	class AlterSpaceOp *op;
-	rlist_foreach_entry(op, &alter->ops, link) {
-		op->rollback(alter);
+	try {
+		rlist_foreach_entry(op, &alter->ops, link) {
+			op->rollback(alter);
+		}
+	} catch (Exception *e) {
+		return -1;
 	}
 	/* Rebuild index maps once for all indexes. */
 	space_fill_index_map(alter->old_space);
@@ -1075,6 +1091,8 @@ alter_space_do(struct txn_stmt *stmt, struct alter_space *alter)
 	struct trigger *on_commit, *on_rollback;
 	on_commit = txn_alter_trigger_new(alter_space_commit, alter);
 	on_rollback = txn_alter_trigger_new(alter_space_rollback, alter);
+	if (on_commit == NULL || on_rollback == NULL)
+		diag_raise();
 
 	/* Create a definition of the new space. */
 	space_dump_def(alter->old_space, &alter->key_list);
@@ -2030,7 +2048,9 @@ on_replace_dd_space(struct trigger * /* trigger */, void *event)
 				     PRIV_C) != 0)
 			return -1;
 		RLIST_HEAD(empty_list);
-		struct space *space = space_new_xc(def, &empty_list);
+		struct space *space = space_new(def, &empty_list);
+		if (space == NULL)
+			return -1;
 		/**
 		 * The new space must be inserted in the space
 		 * cache right away to achieve linearisable
@@ -2169,9 +2189,8 @@ on_replace_dd_space(struct trigger * /* trigger */, void *event)
 			return -1;
 		txn_stmt_on_rollback(stmt, on_rollback);
 		if (old_space->def->opts.is_view) {
-			struct Select *select =
-				sql_view_compile(sql_get(),
-						 old_space->def->opts.sql);
+			struct Select *select = sql_view_compile(sql_get(),
+								 old_space->def->opts.sql);
 			if (select == NULL)
 				return -1;
 			auto select_guard = make_scoped_guard([=] {
@@ -2253,8 +2272,11 @@ on_replace_dd_space(struct trigger * /* trigger */, void *event)
 		 */
 		struct key_def **keys;
 		size_t bsize = old_space->index_count * sizeof(keys[0]);
-		keys = (struct key_def **) region_alloc_xc(&fiber()->gc,
-							   bsize);
+		keys = (struct key_def **) region_alloc(&fiber()->gc, bsize);
+		if (keys == NULL) {
+			diag_set(OutOfMemory, bsize, "region", "new slab");
+			return -1;
+		}
 		for (uint32_t i = 0; i < old_space->index_count; ++i)
 			keys[i] = old_space->index[i]->def->key_def;
 		alter->new_min_field_count =
@@ -2270,7 +2292,11 @@ on_replace_dd_space(struct trigger * /* trigger */, void *event)
 		alter_space_move_indexes(alter, 0, old_space->index_id_max + 1);
 		/* Remember to update schema_version. */
 		(void) new UpdateSchemaVersion(alter);
-		alter_space_do(stmt, alter);
+		try {
+			alter_space_do(stmt, alter);
+		} catch (Exception *e) {
+			return -1;
+		}
 		alter_guard.is_active = false;
 	}
 	return 0;
@@ -2472,10 +2498,12 @@ on_replace_dd_index(struct trigger * /* trigger */, void *event)
 		 */
 		struct key_def **keys;
 		size_t bsize = old_space->index_count * sizeof(keys[0]);
-		keys = (struct key_def **) region_alloc_xc(&fiber()->gc,
-							   bsize);
-		for (uint32_t i = 0, j = 0; i < old_space->index_count;
-		     ++i) {
+		keys = (struct key_def **) region_alloc(&fiber()->gc, bsize);
+		if (keys == NULL) {
+			diag_set(OutOfMemory, bsize, "region", "new slab");
+			return -1;
+		}
+		for (uint32_t i = 0, j = 0; i < old_space->index_count; ++i) {
 			struct index_def *d = old_space->index[i]->def;
 			if (d->iid != index_def->iid)
 				keys[j++] = d->key_def;
@@ -2528,7 +2556,11 @@ on_replace_dd_index(struct trigger * /* trigger */, void *event)
 	(void) new MoveCkConstraints(alter);
 	/* Add an op to update schema_version on commit. */
 	(void) new UpdateSchemaVersion(alter);
-	alter_space_do(stmt, alter);
+	try {
+		alter_space_do(stmt, alter);
+	} catch (Exception *e) {
+		return -1;
+	}
 	scoped_guard.is_active = false;
 	return 0;
 }
@@ -2610,7 +2642,11 @@ on_replace_dd_truncate(struct trigger * /* trigger */, void *event)
 	}
 
 	(void) new MoveCkConstraints(alter);
-	alter_space_do(stmt, alter);
+	try {
+		alter_space_do(stmt, alter);
+	} catch (Exception *e) {
+		return -1;
+	}
 	scoped_guard.is_active = false;
 	return 0;
 }
@@ -2804,7 +2840,11 @@ user_cache_alter_user(struct trigger *trigger, void * /* event */)
 		return -1;
 	auto def_guard = make_scoped_guard([=] { free(user); });
 	/* Can throw if, e.g. too many users. */
-	user_cache_replace(user);
+	try {
+		user_cache_replace(user);
+	} catch (Exception *e) {
+		return -1;
+	}
 	def_guard.is_active = false;
 	return 0;
 }
@@ -2833,7 +2873,11 @@ on_replace_dd_user(struct trigger * /* trigger */, void *event)
 				     PRIV_C) != 0)
 			return -1;
 		auto def_guard = make_scoped_guard([=] { free(user); });
-		(void) user_cache_replace(user);
+		try {
+			(void) user_cache_replace(user);
+		} catch (Exception *e) {
+			return -1;
+		}
 		def_guard.is_active = false;
 		struct trigger *on_rollback =
 			txn_alter_trigger_new(user_cache_remove_user, new_tuple);
@@ -2885,7 +2929,11 @@ on_replace_dd_user(struct trigger * /* trigger */, void *event)
 				     old_user->def->type, PRIV_A) != 0)
 			return -1;
 		auto def_guard = make_scoped_guard([=] { free(user); });
-		user_cache_replace(user);
+		try {
+			user_cache_replace(user);
+		} catch (Exception *e) {
+			return -1;
+		}
 		def_guard.is_active = false;
 		struct trigger *on_rollback =
 			txn_alter_trigger_new(user_cache_alter_user, old_tuple);
@@ -3133,7 +3181,8 @@ on_create_func_rollback(struct trigger *trigger, void * /* event */)
 	/* Remove the new function from the cache and delete it. */
 	struct func *func = (struct func *)trigger->data;
 	func_cache_delete(func->def->fid);
-	trigger_run_xc(&on_alter_func, func);
+	if (trigger_run(&on_alter_func, func) != 0)
+		return -1;
 	func_delete(func);
 	return 0;
 }
@@ -3153,7 +3202,8 @@ on_drop_func_rollback(struct trigger *trigger, void * /* event */)
 	/* Insert the old function back into the cache. */
 	struct func *func = (struct func *)trigger->data;
 	func_cache_insert(func);
-	trigger_run_xc(&on_alter_func, func);
+	if (trigger_run(&on_alter_func, func) != 0)
+		return -1;
 	return 0;
 }
 
@@ -3194,7 +3244,8 @@ on_replace_dd_func(struct trigger * /* trigger */, void *event)
 		func_cache_insert(func);
 		on_rollback->data = func;
 		txn_stmt_on_rollback(stmt, on_rollback);
-		trigger_run_xc(&on_alter_func, func);
+		if (trigger_run(&on_alter_func, func) != 0)
+			return -1;
 	} else if (new_tuple == NULL) {         /* DELETE */
 		uint32_t uid;
 		if (func_def_get_ids_from_tuple(old_tuple, &fid, &uid) != 0)
@@ -3234,7 +3285,8 @@ on_replace_dd_func(struct trigger * /* trigger */, void *event)
 		func_cache_delete(old_func->def->fid);
 		txn_stmt_on_commit(stmt, on_commit);
 		txn_stmt_on_rollback(stmt, on_rollback);
-		trigger_run_xc(&on_alter_func, old_func);
+		if (trigger_run(&on_alter_func, old_func) != 0)
+			return -1;
 	} else {                                /* UPDATE, REPLACE */
 		assert(new_tuple != NULL && old_tuple != NULL);
 		/**
@@ -3319,46 +3371,53 @@ coll_id_def_new_from_tuple(struct tuple *tuple, struct coll_id_def *def)
 		return -1;
 	}
 	if (base->icu.french_collation == coll_icu_on_off_MAX) {
-		tnt_raise(ClientError, ER_CANT_CREATE_COLLATION,
-			  "ICU wrong french_collation option setting, "
-				  "expected ON | OFF");
+		diag_set(ClientError, ER_CANT_CREATE_COLLATION,
+			 "ICU wrong french_collation option setting, "
+			 "expected ON | OFF");
+		return -1;
 	}
 
 	if (base->icu.alternate_handling == coll_icu_alternate_handling_MAX) {
-		tnt_raise(ClientError, ER_CANT_CREATE_COLLATION,
-			  "ICU wrong alternate_handling option setting, "
-				  "expected NON_IGNORABLE | SHIFTED");
+		diag_set(ClientError, ER_CANT_CREATE_COLLATION,
+			 "ICU wrong alternate_handling option setting, "
+			 "expected NON_IGNORABLE | SHIFTED");
+		return -1;
 	}
 
 	if (base->icu.case_first == coll_icu_case_first_MAX) {
-		tnt_raise(ClientError, ER_CANT_CREATE_COLLATION,
-			  "ICU wrong case_first option setting, "
-				  "expected OFF | UPPER_FIRST | LOWER_FIRST");
+		diag_set(ClientError, ER_CANT_CREATE_COLLATION,
+			 "ICU wrong case_first option setting, "
+			 "expected OFF | UPPER_FIRST | LOWER_FIRST");
+		return -1;
 	}
 
 	if (base->icu.case_level == coll_icu_on_off_MAX) {
-		tnt_raise(ClientError, ER_CANT_CREATE_COLLATION,
-			  "ICU wrong case_level option setting, "
-				  "expected ON | OFF");
+		diag_set(ClientError, ER_CANT_CREATE_COLLATION,
+			 "ICU wrong case_level option setting, "
+			 "expected ON | OFF");
+		return -1;
 	}
 
 	if (base->icu.normalization_mode == coll_icu_on_off_MAX) {
-		tnt_raise(ClientError, ER_CANT_CREATE_COLLATION,
-			  "ICU wrong normalization_mode option setting, "
-				  "expected ON | OFF");
+		diag_set(ClientError, ER_CANT_CREATE_COLLATION,
+			 "ICU wrong normalization_mode option setting, "
+			 "expected ON | OFF");
+		return -1;
 	}
 
 	if (base->icu.strength == coll_icu_strength_MAX) {
-		tnt_raise(ClientError, ER_CANT_CREATE_COLLATION,
-			  "ICU wrong strength option setting, "
-				  "expected PRIMARY | SECONDARY | "
-				  "TERTIARY | QUATERNARY | IDENTICAL");
+		diag_set(ClientError, ER_CANT_CREATE_COLLATION,
+			 "ICU wrong strength option setting, "
+			 "expected PRIMARY | SECONDARY | "
+			 "TERTIARY | QUATERNARY | IDENTICAL");
+		return -1;
 	}
 
 	if (base->icu.numeric_collation == coll_icu_on_off_MAX) {
-		tnt_raise(ClientError, ER_CANT_CREATE_COLLATION,
-			  "ICU wrong numeric_collation option setting, "
-				  "expected ON | OFF");
+		diag_set(ClientError, ER_CANT_CREATE_COLLATION,
+			 "ICU wrong numeric_collation option setting, "
+			 "expected ON | OFF");
+		return -1;
 	}
 	return 0;
 }
@@ -3566,116 +3625,126 @@ priv_def_check(struct priv_def *priv, enum priv_type priv_type)
 			     priv->object_type, priv_type) != 0)
 		return -1;
 	switch (priv->object_type) {
-	case SC_UNIVERSE:
-		if (grantor->def->uid != ADMIN) {
-			tnt_raise(AccessDeniedError,
-				  priv_name(priv_type),
-				  schema_object_name(SC_UNIVERSE),
-				  name,
-				  grantor->def->name);
+		case SC_UNIVERSE:
+			if (grantor->def->uid != ADMIN) {
+				diag_set(AccessDeniedError,
+					 priv_name(priv_type),
+					 schema_object_name(SC_UNIVERSE),
+					 name,
+					 grantor->def->name);
+				return -1;
+			}
+			break;
+		case SC_SPACE: {
+			struct space *space = space_cache_find(priv->object_id);
+			if (space == NULL)
+				return -1;
+			if (space->def->uid != grantor->def->uid &&
+			    grantor->def->uid != ADMIN) {
+				diag_set(AccessDeniedError,
+					 priv_name(priv_type),
+					 schema_object_name(SC_SPACE), name,
+					 grantor->def->name);
+				return -1;
+			}
+			break;
 		}
-		break;
-	case SC_SPACE:
-	{
-		struct space *space = space_cache_find_xc(priv->object_id);
-		if (space->def->uid != grantor->def->uid &&
-		    grantor->def->uid != ADMIN) {
-			tnt_raise(AccessDeniedError,
-				  priv_name(priv_type),
-				  schema_object_name(SC_SPACE), name,
-				  grantor->def->name);
+		case SC_FUNCTION: {
+			struct func *func = func_by_id(priv->object_id);
+			if (func == NULL) {
+				diag_set(ClientError, ER_NO_SUCH_FUNCTION, int2str(priv->object_id));
+				return -1;
+			}
+			if (func->def->uid != grantor->def->uid &&
+			    grantor->def->uid != ADMIN) {
+				diag_set(AccessDeniedError,
+					 priv_name(priv_type),
+					 schema_object_name(SC_FUNCTION), name,
+					 grantor->def->name);
+				return -1;
+			}
+			break;
 		}
-		break;
-	}
-	case SC_FUNCTION:
-	{
-		struct func *func = func_by_id(priv->object_id);
-		if (func == NULL) {
-			diag_set(ClientError, ER_NO_SUCH_FUNCTION, int2str(priv->object_id));
-			diag_raise();
+		case SC_SEQUENCE: {
+			struct sequence *seq = sequence_by_id(priv->object_id);
+			if (seq == NULL) {
+				diag_set(ClientError, ER_NO_SUCH_SEQUENCE, int2str(priv->object_id));
+				return -1;
+			}
+			if (seq->def->uid != grantor->def->uid &&
+			    grantor->def->uid != ADMIN) {
+				diag_set(AccessDeniedError,
+					 priv_name(priv_type),
+					 schema_object_name(SC_SEQUENCE), name,
+					 grantor->def->name);
+				return -1;
+			}
+			break;
 		}
-		if (func->def->uid != grantor->def->uid &&
-		    grantor->def->uid != ADMIN) {
-			tnt_raise(AccessDeniedError,
-				  priv_name(priv_type),
-				  schema_object_name(SC_FUNCTION), name,
-				  grantor->def->name);
+		case SC_ROLE: {
+			struct user *role = user_by_id(priv->object_id);
+			if (role == NULL || role->def->type != SC_ROLE) {
+				diag_set(ClientError, ER_NO_SUCH_ROLE,
+					 role ? role->def->name :
+					 int2str(priv->object_id));
+				return -1;
+			}
+			/*
+			 * Only the creator of the role can grant or revoke it.
+			 * Everyone can grant 'PUBLIC' role.
+			 */
+			if (role->def->owner != grantor->def->uid &&
+			    grantor->def->uid != ADMIN &&
+			    (role->def->uid != PUBLIC || priv->access != PRIV_X)) {
+				diag_set(AccessDeniedError,
+					 priv_name(priv_type),
+					 schema_object_name(SC_ROLE), name,
+					 grantor->def->name);
+				return -1;
+			}
+			/* Not necessary to do during revoke, but who cares. */
+			if (role_check(grantee, role) != 0)
+				return -1;
+			break;
 		}
-		break;
-	}
-	case SC_SEQUENCE:
-	{
-		struct sequence *seq = sequence_cache_find(priv->object_id);
-		if (seq->def->uid != grantor->def->uid &&
-		    grantor->def->uid != ADMIN) {
-			tnt_raise(AccessDeniedError,
-				  priv_name(priv_type),
-				  schema_object_name(SC_SEQUENCE), name,
-				  grantor->def->name);
+		case SC_USER: {
+			struct user *user = user_by_id(priv->object_id);
+			if (user == NULL || user->def->type != SC_USER) {
+				diag_set(ClientError, ER_NO_SUCH_USER,
+					 user ? user->def->name :
+					 int2str(priv->object_id));
+				return -1;
+			}
+			if (user->def->owner != grantor->def->uid &&
+			    grantor->def->uid != ADMIN) {
+				diag_set(AccessDeniedError,
+					 priv_name(priv_type),
+					 schema_object_name(SC_USER), name,
+					 grantor->def->name);
+				return -1;
+			}
+			break;
 		}
-		break;
-	}
-	case SC_ROLE:
-	{
-		struct user *role = user_by_id(priv->object_id);
-		if (role == NULL || role->def->type != SC_ROLE) {
-			tnt_raise(ClientError, ER_NO_SUCH_ROLE,
-				  role ? role->def->name :
-				  int2str(priv->object_id));
+		case SC_ENTITY_SPACE:
+		case SC_ENTITY_FUNCTION:
+		case SC_ENTITY_SEQUENCE:
+		case SC_ENTITY_ROLE:
+		case SC_ENTITY_USER: {
+			/* Only admin may grant privileges on an entire entity. */
+			if (grantor->def->uid != ADMIN) {
+				diag_set(AccessDeniedError, priv_name(priv_type),
+					 schema_object_name(priv->object_type), name,
+					 grantor->def->name);
+				return -1;
+			}
 		}
-		/*
-		 * Only the creator of the role can grant or revoke it.
-		 * Everyone can grant 'PUBLIC' role.
-		 */
-		if (role->def->owner != grantor->def->uid &&
-		    grantor->def->uid != ADMIN &&
-		    (role->def->uid != PUBLIC || priv->access != PRIV_X)) {
-			tnt_raise(AccessDeniedError,
-				  priv_name(priv_type),
-				  schema_object_name(SC_ROLE), name,
-				  grantor->def->name);
-		}
-		/* Not necessary to do during revoke, but who cares. */
-		if (role_check(grantee, role) != 0)
-			diag_raise();
-		break;
-	}
-	case SC_USER:
-	{
-		struct user *user = user_by_id(priv->object_id);
-		if (user == NULL || user->def->type != SC_USER) {
-			tnt_raise(ClientError, ER_NO_SUCH_USER,
-				  user ? user->def->name :
-				  int2str(priv->object_id));
-		}
-		if (user->def->owner != grantor->def->uid &&
-		    grantor->def->uid != ADMIN) {
-			tnt_raise(AccessDeniedError,
-				  priv_name(priv_type),
-				  schema_object_name(SC_USER), name,
-				  grantor->def->name);
-		}
-		break;
-	}
-	case SC_ENTITY_SPACE:
-	case SC_ENTITY_FUNCTION:
-	case SC_ENTITY_SEQUENCE:
-	case SC_ENTITY_ROLE:
-	case SC_ENTITY_USER:
-	{
-		/* Only admin may grant privileges on an entire entity. */
-		if (grantor->def->uid != ADMIN) {
-			tnt_raise(AccessDeniedError, priv_name(priv_type),
-				  schema_object_name(priv->object_type), name,
-				  grantor->def->name);
-		}
-	}
-	default:
-		break;
+		default:
+			break;
 	}
 	if (priv->access == 0) {
-		tnt_raise(ClientError, ER_GRANT,
-			  "the grant tuple has no privileges");
+		diag_set(ClientError, ER_GRANT,
+			 "the grant tuple has no privileges");
+		return -1;
 	}
 	return 0;
 }
@@ -4038,7 +4107,8 @@ on_create_sequence_rollback(struct trigger *trigger, void * /* event */)
 	/* Remove the new sequence from the cache and delete it. */
 	struct sequence *seq = (struct sequence *)trigger->data;
 	sequence_cache_delete(seq->def->id);
-	trigger_run_xc(&on_alter_sequence, seq);
+	if (trigger_run(&on_alter_sequence, seq) != 0)
+		return -1;
 	sequence_delete(seq);
 	return 0;
 }
@@ -4058,7 +4128,8 @@ on_drop_sequence_rollback(struct trigger *trigger, void * /* event */)
 	/* Insert the old sequence back into the cache. */
 	struct sequence *seq = (struct sequence *)trigger->data;
 	sequence_cache_insert(seq);
-	trigger_run_xc(&on_alter_sequence, seq);
+	if (trigger_run(&on_alter_sequence, seq) != 0)
+		return -1;
 	return 0;
 }
 
@@ -4081,7 +4152,8 @@ on_alter_sequence_rollback(struct trigger *trigger, void * /* event */)
 	assert(seq != NULL);
 	free(seq->def);
 	seq->def = def;
-	trigger_run_xc(&on_alter_sequence, seq);
+	if (trigger_run(&on_alter_sequence, seq) != 0)
+		return -1;
 	return 0;
 }
 
@@ -4182,7 +4254,8 @@ on_replace_dd_sequence(struct trigger * /* trigger */, void *event)
 	}
 
 	def_guard.is_active = false;
-	trigger_run_xc(&on_alter_sequence, seq);
+	if (trigger_run(&on_alter_sequence, seq) != 0)
+		return -1;
 	return 0;
 }
 
@@ -4323,7 +4396,8 @@ set_space_sequence(struct trigger *trigger, void * /* event */)
 	space->sequence_fieldno = fieldno;
 	free(space->sequence_path);
 	space->sequence_path = path;
-	trigger_run_xc(&on_alter_space, space);
+	if (trigger_run(&on_alter_space, space) != 0)
+		return -1;
 	return 0;
 }
 
@@ -4343,7 +4417,8 @@ clear_space_sequence(struct trigger *trigger, void * /* event */)
 	space->sequence_fieldno = 0;
 	free(space->sequence_path);
 	space->sequence_path = NULL;
-	trigger_run_xc(&on_alter_space, space);
+	if (trigger_run(&on_alter_space, space) != 0)
+		return -1;
 	return 0;
 }
 
@@ -4445,7 +4520,8 @@ on_replace_dd_space_sequence(struct trigger * /* trigger */, void *event)
 		space->sequence_path = NULL;
 		txn_stmt_on_rollback(stmt, on_rollback);
 	}
-	trigger_run_xc(&on_alter_space, space);
+	if (trigger_run(&on_alter_space, space) != 0)
+		return -1;
 	return 0;
 }
 
@@ -4947,16 +5023,18 @@ on_replace_dd_fk_constraint(struct trigger * /* trigger*/, void *event)
 		if (fk_def == NULL)
 			return -1;
 		auto fk_def_guard = make_scoped_guard([=] { free(fk_def); });
-		struct space *child_space =
-			space_cache_find_xc(fk_def->child_id);
+		struct space *child_space = space_cache_find(fk_def->child_id);
+		if (child_space == NULL)
+			return -1;
 		if (child_space->def->opts.is_view) {
 			diag_set(ClientError, ER_CREATE_FK_CONSTRAINT,
-				  fk_def->name,
-				  "referencing space can't be VIEW");
+				 fk_def->name,
+				 "referencing space can't be VIEW");
 			return -1;
 		}
-		struct space *parent_space =
-			space_cache_find_xc(fk_def->parent_id);
+		struct space *parent_space = space_cache_find(fk_def->parent_id);
+		if (parent_space == NULL)
+			return -1;
 		if (parent_space->def->opts.is_view) {
 			diag_set(ClientError, ER_CREATE_FK_CONSTRAINT,
 				 fk_def->name,
@@ -5101,10 +5179,10 @@ on_replace_dd_fk_constraint(struct trigger * /* trigger*/, void *event)
 		if (fk_def == NULL)
 			return -1;
 		auto fk_def_guard = make_scoped_guard([=] { free(fk_def); });
-		struct space *child_space =
-			space_cache_find_xc(fk_def->child_id);
-		struct space *parent_space =
-			space_cache_find_xc(fk_def->parent_id);
+		struct space *child_space = space_cache_find(fk_def->child_id);
+		struct space *parent_space = space_cache_find(fk_def->parent_id);
+		if (child_space == NULL or parent_space == NULL)
+			return -1;
 		struct fk_constraint *old_fk=
 			fk_constraint_remove(&child_space->child_fk_constraint,
 					     fk_def->name);
@@ -5178,7 +5256,8 @@ on_create_ck_constraint_rollback(struct trigger *trigger, void * /* event */)
 					   strlen(ck->def->name)) != NULL);
 	space_remove_ck_constraint(space, ck);
 	ck_constraint_delete(ck);
-	trigger_run_xc(&on_alter_space, space);
+	if (trigger_run(&on_alter_space, space) != 0)
+		return -1;
 	return 0;
 }
 
@@ -5204,7 +5283,8 @@ on_drop_ck_constraint_rollback(struct trigger *trigger, void * /* event */)
 					   strlen(ck->def->name)) == NULL);
 	if (space_add_ck_constraint(space, ck) != 0)
 		panic("Can't recover after CK constraint drop rollback");
-	trigger_run_xc(&on_alter_space, space);
+	if (trigger_run(&on_alter_space, space) != 0)
+		return -1;
 	return 0;
 }
 
@@ -5232,7 +5312,8 @@ on_replace_ck_constraint_rollback(struct trigger *trigger, void * /* event */)
 	rlist_del_entry(new_ck, link);
 	rlist_add_entry(&space->ck_constraint, ck, link);
 	ck_constraint_delete(new_ck);
-	trigger_run_xc(&on_alter_space, space);
+	if (trigger_run(&on_alter_space, space) != 0)
+		return -1;
 	return 0;
 }
 
@@ -5282,7 +5363,7 @@ on_replace_dd_ck_constraint(struct trigger * /* trigger*/, void *event)
 		if (pk != NULL && index_size(pk) > 0) {
 			diag_set(ClientError, ER_CREATE_CK_CONSTRAINT,
 				 ck_def->name,
-				  "referencing space must be empty");
+				 "referencing space must be empty");
 			return -1;
 		}
 		struct ck_constraint *new_ck_constraint =
@@ -5332,7 +5413,9 @@ on_replace_dd_ck_constraint(struct trigger * /* trigger*/, void *event)
 	txn_stmt_on_rollback(stmt, on_rollback);
 	txn_stmt_on_commit(stmt, on_commit);
 
-	trigger_run_xc(&on_alter_space, space);
+	if (trigger_run(&on_alter_space, space) != 0)
+		return -1;
+
 	return 0;
 }
 
@@ -5373,18 +5456,20 @@ on_replace_dd_func_index(struct trigger *trigger, void *event)
 			diag_set(ClientError, ER_NO_SUCH_FUNCTION, int2str(fid));
 			return -1;
 		}
-		func_index_check_func(func);
+		if (func_index_check_func(func) != 0)
+			return -1;
 		if (index->def->opts.func_id != func->def->fid) {
-			tnt_raise(ClientError, ER_WRONG_INDEX_OPTIONS, 0,
-				  "Function ids defined in _index and "
-				  "_func_index don't match");
+			diag_set(ClientError, ER_WRONG_INDEX_OPTIONS, 0,
+				 "Function ids defined in _index and "
+				 "_func_index don't match");
+			return -1;
 		}
 	} else if (old_tuple != NULL && new_tuple == NULL) {
 		uint32_t space_id;
 		uint32_t index_id;
 
 		if (tuple_field_u32(old_tuple,BOX_FUNC_INDEX_FIELD_SPACE_ID,
-			&space_id) != 0)
+				    &space_id) != 0)
 			return -1;
 		if (tuple_field_u32(old_tuple,BOX_FUNC_INDEX_FIELD_INDEX_ID,
 				    &index_id) != 0)
@@ -5419,7 +5504,11 @@ on_replace_dd_func_index(struct trigger *trigger, void *event)
 				 space->index_id_max + 1);
 	(void) new MoveCkConstraints(alter);
 	(void) new UpdateSchemaVersion(alter);
-	alter_space_do(stmt, alter);
+	try {
+		alter_space_do(stmt, alter);
+	} catch (Exception *e) {
+		return -1;
+	}
 
 	scoped_guard.is_active = false;
 	return 0;

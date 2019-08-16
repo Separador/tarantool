@@ -176,8 +176,8 @@ struct space *schema_space(uint32_t id);
  * Check whether or not an object has grants on it (restrict
  * constraint in drop object).
  * _priv space to look up by space id
- * @retval true object has grants
- * @retval false object has no grants
+ * @retval (bool *out) true object has grants
+ * @retval (bool *out) false object has no grants
  */
 int
 schema_find_grants(const char *type, uint32_t id, bool *out);
