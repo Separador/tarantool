@@ -313,6 +313,18 @@ void
 httpc_set_follow_location(struct httpc_request *req, long follow);
 
 /**
+ * Enable automatic decompression of HTTP downloads: set the contents
+ * of the Accept-Encoding: header sent in an HTTP request,
+ * and enable decoding of a response
+ * when a Content-Encoding: header is received.
+ * @param req request
+ * @param encoding - specify what encoding you'd like.
+ * @see https://curl.haxx.se/libcurl/c/CURLOPT_ACCEPT_ENCODING.html
+ */
+void
+httpc_set_accept_encoding(struct httpc_request *req, const char *encoding);
+
+/**
  * This function does async HTTP request
  * @param request - reference to request object with filled fields
  * @param timeout - timeout of waiting for libcurl api

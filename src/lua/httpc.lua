@@ -287,6 +287,8 @@ end
 --          'Location' header that a server sends as part of an
 --          3xx response;
 --
+--      accept_encoding - enables automatic decompression of HTTP downloads;
+--
 --  Returns:
 --      {
 --          status=NUMBER,
