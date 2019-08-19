@@ -598,14 +598,14 @@ applier_on_connect_f(struct trigger *trigger, void *event)
 	applier_pause(applier);
 }
 
-void
+int
 replicaset_connect(struct applier **appliers, int count,
 		   bool connect_quorum)
 {
 	if (count == 0) {
 		/* Cleanup the replica set. */
 		replicaset_update(appliers, count);
-		return;
+		return 0;
 	}
 
 	say_info("connecting to %d replicas", count);
@@ -660,9 +660,13 @@ replicaset_connect(struct applier **appliers, int count,
 			 count - state.connected, count);
 		/* Timeout or connection failure. */
 		if (connect_quorum && state.connected < quorum) {
-			diag_set(ClientError, ER_CFG, "replication",
-				 "failed to connect to one or more replicas");
-			goto error;
+			/* Destroy appliers */
+			for (int i = 0; i < count; i++) {
+				trigger_clear(&triggers[i].base);
+				applier_stop(appliers[i]);
+			}
+			box_set_orphan(true);
+			return -1;
 		}
 	} else {
 		say_info("connected to %d replicas", state.connected);
@@ -685,16 +689,14 @@ replicaset_connect(struct applier **appliers, int count,
 	try {
 		replicaset_update(appliers, count);
 	} catch (Exception *e) {
-		goto error;
+		/* Destroy appliers */
+		for (int i = 0; i < count; i++) {
+			trigger_clear(&triggers[i].base);
+			applier_stop(appliers[i]);
+		}
+		diag_raise();
 	}
-	return;
-error:
-	/* Destroy appliers */
-	for (int i = 0; i < count; i++) {
-		trigger_clear(&triggers[i].base);
-		applier_stop(appliers[i]);
-	}
-	diag_raise();
+	return 0;
 }
 
 bool

@@ -378,7 +378,7 @@ replicaset_add(uint32_t replica_id, const struct tt_uuid *instance_uuid);
  *                       least replication_connect_quorum
  *                       appliers have successfully connected.
  */
-void
+int
 replicaset_connect(struct applier **appliers, int count,
 		   bool connect_quorum);
 

@@ -666,7 +666,7 @@ cfg_get_replication(int *p_count)
  * Sync box.cfg.replication with the cluster registry, but
  * don't start appliers.
  */
-static void
+static int
 box_sync_replication(bool connect_quorum)
 {
 	int count = 0;
@@ -679,9 +679,10 @@ box_sync_replication(bool connect_quorum)
 			applier_delete(appliers[i]); /* doesn't affect diag */
 	});
 
-	replicaset_connect(appliers, count, connect_quorum);
+	int rc = replicaset_connect(appliers, count, connect_quorum);
 
 	guard.is_active = false;
+	return rc;
 }
 
 void
@@ -703,7 +704,9 @@ box_set_replication(void)
 	 * to connect to at least replication_connect_quorum
 	 * masters.
 	 */
-	box_sync_replication(true);
+	if (box_sync_replication(true) != 0) {
+		return;
+	}
 	/* Follow replica */
 	replicaset_follow();
 	/* Wait until appliers are in sync */
