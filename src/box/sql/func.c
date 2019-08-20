@@ -691,7 +691,12 @@ substrFunc(sql_context * context, int argc, sql_value ** argv)
 	i64 p1, p2;
 	int negP2 = 0;
 
-	assert(argc == 3 || argc == 2);
+	if (argc != 2 && argc != 3) {
+		diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "SUBSTR",
+			 "1 or 2", argc);
+		context->is_aborted = true;
+		return;
+	}
 	if (sql_value_is_null(argv[1])
 	    || (argc == 3 && sql_value_is_null(argv[2]))
 	    ) {
@@ -779,13 +784,6 @@ substrFunc(sql_context * context, int argc, sql_value ** argv)
 	}
 }
 
-static int
-sql_builtin_substr_check_param_count(struct func_sql_builtin *func, int argc)
-{
-	(void) func;
-	return argc != 2 && argc != 3 ? -1 : 0;
-}
-
 /*
  * Implementation of the round() function
  */
@@ -794,7 +792,12 @@ roundFunc(sql_context * context, int argc, sql_value ** argv)
 {
 	int n = 0;
 	double r;
-	assert(argc == 1 || argc == 2);
+	if (argc != 1 && argc != 2) {
+		diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "ROUND",
+			 "1 or 2", argc);
+		context->is_aborted = true;
+		return;
+	}
 	if (argc == 2) {
 		if (sql_value_is_null(argv[1]))
 			return;
@@ -824,13 +827,6 @@ roundFunc(sql_context * context, int argc, sql_value ** argv)
 		sqlAtoF(rounded_value, &r, sqlStrlen30(rounded_value));
 	}
 	sql_result_double(context, r);
-}
-
-static int
-sql_builtin_round_check_param_count(struct func_sql_builtin *func, int argc)
-{
-	(void) func;
-	return argc != 1 && argc != 2 ? -1 : 0;
 }
 
 /*
@@ -1193,6 +1189,12 @@ likeFunc(sql_context *context, int argc, sql_value **argv)
 {
 	u32 escape = SQL_END_OF_STRING;
 	int nPat;
+	if (argc != 2 && argc != 3) {
+		diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT,
+			 "LIKE", "2 or 3", argc);
+		context->is_aborted = true;
+		return;
+	}
 	sql *db = sql_context_db_handle(context);
 	int rhs_type = sql_value_type(argv[0]);
 	int lhs_type = sql_value_type(argv[1]);
@@ -1261,13 +1263,6 @@ likeFunc(sql_context *context, int argc, sql_value **argv)
 		return;
 	}
 	sql_result_bool(context, res == MATCH);
-}
-
-static int
-sql_builtin_like_check_param_count(struct func_sql_builtin *func, int argc)
-{
-	(void) func;
-	return argc != 2 && argc != 3 ? -1 : 0;
 }
 
 /*
@@ -1812,15 +1807,10 @@ trim_func(struct sql_context *context, int argc, sql_value **argv)
 		trim_func_three_args(context, argv[0], argv[1], argv[2]);
 		break;
 	default:
-		unreachable();
+		diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "TRIM",
+			 "1 or 2 or 3", argc);
+		context->is_aborted = true;
 	}
-}
-
-static int
-sql_builtin_trim_check_param_count(struct func_sql_builtin *func, int argc)
-{
-	(void) func;
-	return argc != 1 && argc != 2 && argc != 3 ? -1 : 0;
 }
 
 /*
@@ -1998,6 +1988,12 @@ static void
 countStep(sql_context * context, int argc, sql_value ** argv)
 {
 	CountCtx *p;
+	if (argc != 0 && argc != 1) {
+		diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT,
+			 "COUNT", "0 or 1", argc);
+		context->is_aborted = true;
+		return;
+	}
 	p = sql_aggregate_context(context, sizeof(*p));
 	if ((argc == 0 || ! sql_value_is_null(argv[0])) && p) {
 		p->n++;
@@ -2010,13 +2006,6 @@ countFinalize(sql_context * context)
 	CountCtx *p;
 	p = sql_aggregate_context(context, 0);
 	sql_result_uint(context, p ? p->n : 0);
-}
-
-static int
-sql_builtin_count_check_param_count(struct func_sql_builtin *func, int argc)
-{
-	(void) func;
-	return argc != 0 && argc != 1 ? -1 : 0;
 }
 
 /*
@@ -2083,7 +2072,12 @@ groupConcatStep(sql_context * context, int argc, sql_value ** argv)
 	StrAccum *pAccum;
 	const char *zSep;
 	int nVal, nSep;
-	assert(argc == 1 || argc == 2);
+	if (argc != 1 && argc != 2) {
+		diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT,
+			 "GROUP_CONCAT", "1 or 2", argc);
+		context->is_aborted = true;
+		return;
+	}
 	if (sql_value_is_null(argv[0]))
 		return;
 	pAccum =
@@ -2131,14 +2125,6 @@ groupConcatFinalize(sql_context * context)
 	}
 }
 
-static int
-sql_builtin_group_concat_check_param_count(struct func_sql_builtin *func,
-					   int argc)
-{
-	(void) func;
-	return argc != 1 && argc != 2 ? -1 : 0;
-}
-
 int
 sql_is_like_func(struct Expr *expr)
 {
@@ -2158,16 +2144,9 @@ sql_func_by_signature(const char *name, int argc)
 	struct func *base = func_by_name(name, strlen(name));
 	if (base == NULL || !base->def->exports.sql)
 		return NULL;
-	if (base->def->language == FUNC_LANGUAGE_SQL_BUILTIN) {
-		struct func_sql_builtin *func =
-			(struct func_sql_builtin *) base;
-		if (func->check_param_count(func, argc) != 0)
-			return NULL;
-	} else {
-		if (base->def->param_count != -1 &&
-		    base->def->param_count != argc)
-			return NULL;
-	}
+
+	if (base->def->param_count != -1 && base->def->param_count != argc)
+		return NULL;
 	return base;
 }
 
@@ -2190,34 +2169,25 @@ sql_builtin_stub(sql_context *ctx, int argc, sql_value **argv)
 	ctx->is_aborted = true;
 }
 
-static int
-sql_builtin_default_check_param_count(struct func_sql_builtin *func, int argc)
-{
-	return (func->base.def->param_count != -1 &&
-		argc != func->base.def->param_count) ? -1 : 0;
-}
-
-static int
-sql_builtin_coalesce_check_param_count(struct func_sql_builtin *func, int argc)
-{
-	(void) func;
-	return argc == 0 || argc == 1 ? -1 : 0;
-}
-
 /**
  * A sequence of SQL builtins definitions in
  * lexicographic order.
  */
 static struct {
+	/**
+	 * Name is used to find corresponding entry in array
+	 * sql_builtins applying binary search.
+	 */
 	const char *name;
+	/** Members below are related to struct func_sql_builtin. */
+	uint16_t flags;
+	void (*call)(sql_context *ctx, int argc, sql_value **argv);
+	void (*finalize)(sql_context *ctx);
+	/** Members below are related to struct func_def. */
+	bool is_deterministic;
 	int param_count;
 	enum field_type returns;
 	enum func_aggregate aggregate;
-	bool is_deterministic;
-	uint16_t flags;
-	void (*call)(sql_context *ctx, int argc, sql_value **argv);
-	int (*check_param_count)(struct func_sql_builtin *func, int argc);
-	void (*finalize)(sql_context *ctx);
 } sql_builtins[] = {
 	{.name = "ABS",
 	 .param_count = 1,
@@ -2226,7 +2196,6 @@ static struct {
 	 .is_deterministic = true,
 	 .flags = 0,
 	 .call = absFunc,
-	 .check_param_count = sql_builtin_default_check_param_count,
 	 .finalize = NULL},
 	{.name = "AVG",
 	 .param_count = 1,
@@ -2235,7 +2204,6 @@ static struct {
 	 .aggregate = FUNC_AGGREGATE_GROUP,
 	 .flags = 0,
 	 .call = sum_step,
-	 .check_param_count = sql_builtin_default_check_param_count,
 	 .finalize = avgFinalize},
 	{.name = "CHAR",
 	 .param_count = -1,
@@ -2244,7 +2212,6 @@ static struct {
 	 .aggregate = FUNC_AGGREGATE_NONE,
 	 .flags = 0,
 	 .call = charFunc,
-	 .check_param_count = sql_builtin_default_check_param_count,
 	 .finalize = NULL},
 	{.name = "CHARACTER_LENGTH",
 	 .param_count = 1,
@@ -2253,7 +2220,6 @@ static struct {
 	 .is_deterministic = true,
 	 .flags = 0,
 	 .call = lengthFunc,
-	 .check_param_count = sql_builtin_default_check_param_count,
 	 .finalize = NULL},
 	{.name = "CHAR_LENGTH",
 	 .param_count = 1,
@@ -2262,7 +2228,6 @@ static struct {
 	 .is_deterministic = true,
 	 .flags = 0,
 	 .call = lengthFunc,
-	 .check_param_count = sql_builtin_default_check_param_count,
 	 .finalize = NULL},
 	{.name = "COALESCE",
 	 .param_count = -1,
@@ -2271,7 +2236,6 @@ static struct {
 	 .is_deterministic = true,
 	 .flags = SQL_FUNC_COALESCE,
 	 .call = sql_builtin_stub,
-	 .check_param_count = sql_builtin_coalesce_check_param_count,
 	 .finalize = NULL},
 	{.name = "COUNT",
 	 .param_count = -1,
@@ -2280,7 +2244,6 @@ static struct {
 	 .is_deterministic = false,
 	 .flags = 0,
 	 .call = countStep,
-	 .check_param_count = sql_builtin_count_check_param_count,
 	 .finalize = countFinalize},
 	{.name = "GREATEST",
 	 .param_count = -1,
@@ -2289,7 +2252,6 @@ static struct {
 	 .is_deterministic = true,
 	 .flags = SQL_FUNC_NEEDCOLL | SQL_FUNC_MAX,
 	 .call = minmaxFunc,
-	 .check_param_count = sql_builtin_default_check_param_count,
 	 .finalize = NULL},
 	{.name = "GROUP_CONCAT",
 	 .param_count = -1,
@@ -2298,7 +2260,6 @@ static struct {
 	 .is_deterministic = false,
 	 .flags = 0,
 	 .call = groupConcatStep,
-	 .check_param_count = sql_builtin_group_concat_check_param_count,
 	 .finalize = groupConcatFinalize},
 	{.name = "HEX",
 	 .param_count = 1,
@@ -2307,7 +2268,6 @@ static struct {
 	 .is_deterministic = true,
 	 .flags = 0,
 	 .call = hexFunc,
-	 .check_param_count = sql_builtin_default_check_param_count,
 	 .finalize = NULL},
 	{.name = "IFNULL",
 	 .param_count = 2,
@@ -2316,7 +2276,6 @@ static struct {
 	 .is_deterministic = true,
 	 .flags = SQL_FUNC_COALESCE,
 	 .call = sql_builtin_stub,
-	 .check_param_count = sql_builtin_default_check_param_count,
 	 .finalize = NULL},
 	{.name = "LEAST",
 	 .param_count = -1,
@@ -2325,7 +2284,6 @@ static struct {
 	 .is_deterministic = true,
 	 .flags = SQL_FUNC_NEEDCOLL | SQL_FUNC_MIN,
 	 .call = minmaxFunc,
-	 .check_param_count = sql_builtin_default_check_param_count,
 	 .finalize = NULL},
 	{.name = "LENGTH",
 	 .param_count = 1,
@@ -2334,7 +2292,6 @@ static struct {
 	 .is_deterministic = true,
 	 .flags = SQL_FUNC_LENGTH,
 	 .call = lengthFunc,
-	 .check_param_count = sql_builtin_default_check_param_count,
 	 .finalize = NULL},
 	{.name = "LIKE",
 	 .param_count = -1,
@@ -2343,7 +2300,6 @@ static struct {
 	 .is_deterministic = true,
 	 .flags = SQL_FUNC_NEEDCOLL | SQL_FUNC_LIKE,
 	 .call = likeFunc,
-	 .check_param_count = sql_builtin_like_check_param_count,
 	 .finalize = NULL},
 	{.name = "LIKELIHOOD",
 	 .param_count = 2,
@@ -2352,7 +2308,6 @@ static struct {
 	 .is_deterministic = true,
 	 .flags = SQL_FUNC_UNLIKELY,
 	 .call = sql_builtin_stub,
-	 .check_param_count = sql_builtin_default_check_param_count,
 	 .finalize = NULL},
 	{.name = "LIKELY",
 	 .param_count = 1,
@@ -2361,7 +2316,6 @@ static struct {
 	 .is_deterministic = true,
 	 .flags = SQL_FUNC_UNLIKELY,
 	 .call = sql_builtin_stub,
-	 .check_param_count = sql_builtin_default_check_param_count,
 	 .finalize = NULL},
 	{.name = "LOWER",
 	 .param_count = 1,
@@ -2370,7 +2324,6 @@ static struct {
 	 .is_deterministic = true,
 	 .flags = SQL_FUNC_DERIVEDCOLL | SQL_FUNC_NEEDCOLL,
 	 .call = LowerICUFunc,
-	 .check_param_count = sql_builtin_default_check_param_count,
 	 .finalize = NULL},
 	{.name = "MAX",
 	 .param_count = 1,
@@ -2379,7 +2332,6 @@ static struct {
 	 .is_deterministic = false,
 	 .flags = SQL_FUNC_NEEDCOLL | SQL_FUNC_MAX,
 	 .call = minmaxStep,
-	 .check_param_count = sql_builtin_default_check_param_count,
 	 .finalize = minMaxFinalize},
 	{.name = "MIN",
 	 .param_count = 1,
@@ -2388,7 +2340,6 @@ static struct {
 	 .is_deterministic = false,
 	 .flags = SQL_FUNC_NEEDCOLL | SQL_FUNC_MIN,
 	 .call = minmaxStep,
-	 .check_param_count = sql_builtin_default_check_param_count,
 	 .finalize = minMaxFinalize},
 	{.name = "NULLIF",
 	 .param_count = 2,
@@ -2397,7 +2348,6 @@ static struct {
 	 .is_deterministic = true,
 	 .flags = SQL_FUNC_NEEDCOLL,
 	 .call = nullifFunc,
-	 .check_param_count = sql_builtin_default_check_param_count,
 	 .finalize = NULL},
 	{.name = "POSITION",
 	 .param_count = 2,
@@ -2406,7 +2356,6 @@ static struct {
 	 .is_deterministic = true,
 	 .flags = SQL_FUNC_NEEDCOLL,
 	 .call = position_func,
-	 .check_param_count = sql_builtin_default_check_param_count,
 	 .finalize = NULL},
 	{.name = "PRINTF",
 	 .param_count = -1,
@@ -2415,7 +2364,6 @@ static struct {
 	 .is_deterministic = true,
 	 .flags = 0,
 	 .call = printfFunc,
-	 .check_param_count = sql_builtin_default_check_param_count,
 	 .finalize = NULL},
 	{.name = "QUOTE",
 	 .param_count = 1,
@@ -2424,7 +2372,6 @@ static struct {
 	 .is_deterministic = true,
 	 .flags = 0,
 	 .call = quoteFunc,
-	 .check_param_count = sql_builtin_default_check_param_count,
 	 .finalize = NULL},
 	{.name = "RANDOM",
 	 .param_count = 0,
@@ -2433,7 +2380,6 @@ static struct {
 	 .is_deterministic = false,
 	 .flags = 0,
 	 .call = randomFunc,
-	 .check_param_count = sql_builtin_default_check_param_count,
 	 .finalize = NULL},
 	{.name = "RANDOMBLOB",
 	 .param_count = 1,
@@ -2442,7 +2388,6 @@ static struct {
 	 .is_deterministic = false,
 	 .flags = 0,
 	 .call = randomBlob,
-	 .check_param_count = sql_builtin_default_check_param_count,
 	 .finalize = NULL},
 	{.name = "REPLACE",
 	 .param_count = 3,
@@ -2451,7 +2396,6 @@ static struct {
 	 .is_deterministic = true,
 	 .flags = SQL_FUNC_DERIVEDCOLL,
 	 .call = replaceFunc,
-	 .check_param_count = sql_builtin_default_check_param_count,
 	 .finalize = NULL},
 	{.name = "ROUND",
 	 .param_count = -1,
@@ -2460,7 +2404,6 @@ static struct {
 	 .is_deterministic = true,
 	 .flags = 0,
 	 .call = roundFunc,
-	 .check_param_count = sql_builtin_round_check_param_count,
 	 .finalize = NULL},
 	{.name = "ROW_COUNT",
 	 .param_count = 0,
@@ -2469,7 +2412,6 @@ static struct {
 	 .is_deterministic = true,
 	 .flags = 0,
 	 .call = sql_row_count,
-	 .check_param_count = sql_builtin_default_check_param_count,
 	 .finalize = NULL},
 	{.name = "SOUNDEX",
 	 .param_count = 1,
@@ -2478,7 +2420,6 @@ static struct {
 	 .is_deterministic = true,
 	 .flags = 0,
 	 .call = soundexFunc,
-	 .check_param_count = sql_builtin_default_check_param_count,
 	 .finalize = NULL},
 	{.name = "SUBSTR",
 	 .param_count = -1,
@@ -2487,7 +2428,6 @@ static struct {
 	 .is_deterministic = true,
 	 .flags = SQL_FUNC_DERIVEDCOLL,
 	 .call = substrFunc,
-	 .check_param_count = sql_builtin_substr_check_param_count,
 	 .finalize = NULL},
 	{.name = "SUM",
 	 .param_count = 1,
@@ -2496,7 +2436,6 @@ static struct {
 	 .is_deterministic = false,
 	 .flags = 0,
 	 .call = sum_step,
-	 .check_param_count = sql_builtin_default_check_param_count,
 	 .finalize = sumFinalize},
 	{.name = "TOTAL",
 	 .param_count = 1,
@@ -2505,7 +2444,6 @@ static struct {
 	 .is_deterministic = false,
 	 .flags = 0,
 	 .call = sum_step,
-	 .check_param_count = sql_builtin_default_check_param_count,
 	 .finalize = totalFinalize},
 	{.name = "TRIM",
 	 .param_count = -1,
@@ -2514,7 +2452,6 @@ static struct {
 	 .is_deterministic = true,
 	 .flags = SQL_FUNC_DERIVEDCOLL,
 	 .call = trim_func,
-	 .check_param_count = sql_builtin_trim_check_param_count,
 	 .finalize = NULL},
 	{.name = "TYPEOF",
 	 .param_count = 1,
@@ -2523,7 +2460,6 @@ static struct {
 	 .is_deterministic = true,
 	 .flags = SQL_FUNC_TYPEOF,
 	 .call = typeofFunc,
-	 .check_param_count = sql_builtin_default_check_param_count,
 	 .finalize = NULL},
 	{.name = "UNICODE",
 	 .param_count = 1,
@@ -2532,7 +2468,6 @@ static struct {
 	 .is_deterministic = true,
 	 .flags = 0,
 	 .call = unicodeFunc,
-	 .check_param_count = sql_builtin_default_check_param_count,
 	 .finalize = NULL},
 	{.name = "UNLIKELY",
 	 .param_count = 1,
@@ -2541,7 +2476,6 @@ static struct {
 	 .is_deterministic = true,
 	 .flags = SQL_FUNC_UNLIKELY,
 	 .call = sql_builtin_stub,
-	 .check_param_count = sql_builtin_default_check_param_count,
 	 .finalize = NULL},
 	{.name = "UPPER",
 	 .param_count = 1,
@@ -2550,7 +2484,6 @@ static struct {
 	 .is_deterministic = true,
 	 .flags = SQL_FUNC_DERIVEDCOLL | SQL_FUNC_NEEDCOLL,
 	 .call = UpperICUFunc,
-	 .check_param_count = sql_builtin_default_check_param_count,
 	 .finalize = NULL},
 	{.name = "VERSION",
 	 .param_count = 0,
@@ -2559,7 +2492,6 @@ static struct {
 	 .is_deterministic = true,
 	 .flags = 0,
 	 .call = sql_func_version,
-	 .check_param_count = sql_builtin_default_check_param_count,
 	 .finalize = NULL},
 	{.name = "ZEROBLOB",
 	 .param_count = 1,
@@ -2568,7 +2500,6 @@ static struct {
 	 .is_deterministic = true,
 	 .flags = 0,
 	 .call = zeroblobFunc,
-	 .check_param_count = sql_builtin_default_check_param_count,
 	 .finalize = NULL},
 };
 
@@ -2607,8 +2538,8 @@ func_sql_builtin_new(struct func_def *def)
 		goto end;
 	func->flags = sql_builtins[idx].flags;
 	func->call = sql_builtins[idx].call;
-	func->check_param_count = sql_builtins[idx].check_param_count;
 	func->finalize = sql_builtins[idx].finalize;
+
 	def->param_count = sql_builtins[idx].param_count;
 	def->is_deterministic = sql_builtins[idx].is_deterministic;
 	def->returns = sql_builtins[idx].returns;

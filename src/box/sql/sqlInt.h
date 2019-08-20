@@ -4335,8 +4335,6 @@ struct func_sql_builtin {
 	struct func base;
 	/** A bitmask of SQL flags. */
 	uint16_t flags;
-	/** User data to pass in call method. */
-	void *user_data;
 	/**
 	 * A VDBE-memory-compatible call method for a function.
 	 * SQL Builting functions doesn't use base class call
@@ -4347,11 +4345,6 @@ struct func_sql_builtin {
 	 * privileges as SQL.
 	 */
 	void (*call)(sql_context *ctx, int argc, sql_value **argv);
-	/**
-	 * Check whether do the function support a specified
-	 * number of input arguments.
-	 */
-	int (*check_param_count)(struct func_sql_builtin *func, int argc);
 	/**
 	 * A VDBE-memory-compatible finalize method
 	 * (is valid only for aggregate function).

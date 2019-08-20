@@ -38,8 +38,6 @@
 #include "sqlInt.h"
 #include <stdlib.h>
 #include <string.h>
-#include "box/func.h"
-#include "box/func_def.h"
 #include "box/schema.h"
 
 /*
@@ -678,18 +676,10 @@ resolveExprStep(Walker * pWalker, Expr * pExpr)
 				pParse->is_aborted = true;
 				pNC->nErr++;
 			} else if (wrong_num_args) {
-				const char *err;
-				if (func->def->param_count >= 0) {
-					err = "invalid number of arguments is "
-					      "passed to %.*s(): expected %d, "
-					      "got %d";
-				} else {
-					err = "invalid number of arguments is "
-					      "passed to %.*s()";
-				}
-				diag_set(ClientError, ER_SQL_PARSER_GENERIC,
-					 tt_sprintf(err, nId, zId,
-						    func->def->param_count, n));
+
+				diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT,
+					 tt_sprintf("%d", func->def->param_count),
+					 nId);
 				pParse->is_aborted = true;
 				pNC->nErr++;
 			}
