@@ -3919,7 +3919,7 @@ case OP_RowData: {
 	}
 	testcase( n==0);
 
-	if (sql_vdbe_mem_alloc_region(pOut, n) != 0)
+	if (sql_vdbe_mem_alloc_blob_region(pOut, n) != 0)
 		goto abort_due_to_error;
 	sqlCursorPayload(pCrsr, 0, n, pOut->z);
 	UPDATE_MAX_BLOBSIZE(pOut);

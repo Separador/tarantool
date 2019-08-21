@@ -2805,7 +2805,7 @@ sqlVdbeAllocUnpackedRecord(struct sql *db, struct key_def *key_def)
 
 /* Allocate memory for internal VDBE structure on region. */
 int
-sql_vdbe_mem_alloc_region(Mem *vdbe_mem, uint32_t size)
+sql_vdbe_mem_alloc_blob_region(Mem *vdbe_mem, uint32_t size)
 {
 	vdbe_mem->n = size;
 	vdbe_mem->z = region_alloc(&fiber()->gc, size);
