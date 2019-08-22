@@ -17,3 +17,63 @@ SystemError Failed to allocate 42 bytes in allocator for exception: Cannot alloc
 # normal-stack fiber not crashed
 # big-stack fiber not crashed
 	*** fiber_stack_test: done ***
+	*** diag_test ***
+1..28
+# constract e1 in global diag, share with local diag
+ok 1 - e1 is an error shared between local and global diag
+ok 2 - e1::refs: global+local diag
+# append e2 to global diag, usr error_ref(e2)
+ok 3 - e2::reason == e1
+ok 4 - e1::reason == NULL
+ok 5 - e1::refs: e2 + global diag
+ok 6 - e2::refs: usr + global diag
+# diag_clean global diag
+ok 7 - e1::refs: e2 + local
+ok 8 - e2::refs: usr
+# error_unref(e2) -> e2 destruction
+ok 9 - e1::refs: local diag
+# diag_move(from = local, to = global): move e1 to global
+ok 10 - local diag is empty
+ok 11 - global diag is not empty
+ok 12 - global diag::last == e1
+# svp = diag_svp(global), i.e. 'diag_last(global) = e1' state
+# append e3, e4 to global diag
+# usr error_ref(e1), error_ref(e3), error_ref(e4)
+ok 13 - e1::refs: e3
+ok 14 - e3::refs: usr + e4
+ok 15 - e4::refs: usr + global diag
+ok 16 - e4::reason == e3
+ok 17 - e3::reason == e1
+# diag_rollback_to_svp(global, svp)
+ok 18 - e1::refs: e3 + global diag 2/2
+ok 19 - e3::refs: usr + e4
+ok 20 - e4::refs: usr
+ok 21 - diag_last(global) = e1
+ok 22 - e4::reason == e3
+ok 23 - e3::reason == e1
+ok 24 - e3::refs: usr
+# ensure that sequential rollback is no-op
+ok 25 - e1::refs: global diag
+# test partial list destruction on rollback
+ok 26 - er4:refs: usr + er5 2/2
+# rollback to svp(er2) -> e5:refs == 0, destruction
+ok 27 - er4->reason == er3
+ok 28 - er3:refs: er4
+ok 29 - er3->reason == svp
+ok 30 - svp->refs: global diag + er3
+ok 31 - svp->reason == er1
+ok 32 - er1->refs: err2
+# multiple error sequences after rollback
+ok 33 - er4->refs: usr
+ok 34 - er7->refs: global diag + usr
+ok 35 - svp->refs: er3 + er6
+ok 36 - svp->reason->refs: svp
+ok 37 - er4->refs: usr
+ok 38 - er7->refs: usr
+ok 39 - svp->refs: global diag + er3 + er6
+ok 40 - svp->reason->refs: svp
+ok 41 - svp->refs: er3 + er6
+ok 42 - svp->reason->refs: svp
+ok 43 - svp->refs: er6
+ok 44 - svp->reason->refs: svp
+	*** diag_test: done ***

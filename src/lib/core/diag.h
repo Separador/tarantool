@@ -78,6 +78,8 @@ struct error {
 	char file[DIAG_FILENAME_MAX];
 	/* Error description. */
 	char errmsg[DIAG_ERRMSG_MAX];
+	/* A pointer to the reason error. */
+	struct error *reason;
 };
 
 static inline void
@@ -90,9 +92,11 @@ static inline void
 error_unref(struct error *e)
 {
 	assert(e->refs > 0);
-	--e->refs;
-	if (e->refs == 0)
+	if (--e->refs == 0) {
+		if (e->reason != NULL)
+			error_unref(e->reason);
 		e->destroy(e);
+	}
 }
 
 NORETURN static inline void
@@ -176,6 +180,26 @@ diag_set_error(struct diag *diag, struct error *e)
 }
 
 /**
+ * Add a new error to the diagnostics area: the previous error
+ * becomes a reason of a current.
+ * \param diag diagnostics area
+ * \param e error to add
+ */
+static inline void
+diag_add_error(struct diag *diag, struct error *e)
+{
+	assert(e != NULL);
+	error_ref(e);
+	/*
+	 * Nominally e takes a reason's reference while diag
+	 * releases it's reference because it holds e now
+	 * instead. I.e. reason->refs kept unchanged.
+	 */
+	e->reason = diag->last;
+	diag->last = e;
+}
+
+/**
  * Move all errors from \a from to \a to.
  * \param from source
  * \param to destination
@@ -210,6 +234,45 @@ static inline struct error *
 diag_last_error(struct diag *diag)
 {
 	return diag->last;
+}
+
+/**
+ * Get a diagnostic savepoint: a marker that allows to reset all
+ * errors set after that moment.
+ */
+static inline struct error *
+diag_svp(struct diag *diag)
+{
+	return diag_last_error(diag);
+}
+
+/**
+ * Remove all errors set in a given diagnostics area after a
+ * given savepoint.
+ *
+ * Operation removes reason for the error
+ * preceding the savepoint and releases a diagnostic area's
+ * reference on the most recent error (diag::last for the
+ * rollback beginning). This means that if user code have a
+ * pointer and have a reference to an error object from the
+ * rollback zone, this pointer and the following "reason" error
+ * objects are a valid error list.
+ */
+static inline void
+diag_rollback_to_svp(struct diag *diag, struct error *svp)
+{
+	struct error *begin = diag->last, *prev = NULL;
+	while (diag->last != svp) {
+		prev = diag->last;
+		diag->last = diag->last->reason;
+	}
+	if (diag->last != begin) {
+		assert(prev != NULL && prev->reason == svp);
+		prev->reason = NULL;
+		error_unref(begin);
+		prev->reason = svp;
+		error_ref(svp);
+	}
 }
 
 struct diag *
@@ -270,6 +333,17 @@ BuildSocketError(const char *file, unsigned line, const char *socketname,
 	struct error *e;						\
 	e = Build##class(__FILE__, __LINE__, ##__VA_ARGS__);		\
 	diag_set_error(diag_get(), e);					\
+	/* Restore the errno which might have been reset.  */           \
+	errno = save_errno;                                             \
+} while (0)
+
+#define diag_add(class, ...) do {					\
+	/* Preserve the original errno. */                              \
+	int save_errno = errno;                                         \
+	say_debug("%s at %s:%i", #class, __FILE__, __LINE__);		\
+	struct error *e;						\
+	e = Build##class(__FILE__, __LINE__, ##__VA_ARGS__);		\
+	diag_add_error(diag_get(), e);					\
 	/* Restore the errno which might have been reset.  */           \
 	errno = save_errno;                                             \
 } while (0)

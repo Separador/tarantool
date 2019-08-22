@@ -72,7 +72,7 @@ target_link_libraries(decimal.test core unit)
 
 add_executable(fiber.test fiber.cc)
 set_source_files_properties(fiber.cc PROPERTIES COMPILE_FLAGS -O0)
-target_link_libraries(fiber.test core unit)
+target_link_libraries(fiber.test core box unit)
 
 if (NOT ENABLE_GCOV)
     # This test is known to be broken with GCOV

@@ -1,3 +1,6 @@
+#include "box/error.h"
+#include "diag.h"
+#include "errcode.h"
 #include "memory.h"
 #include "fiber.h"
 #include "unit.h"
@@ -181,12 +184,166 @@ fiber_name_test()
 	footer();
 }
 
+void
+diag_test()
+{
+	header();
+	plan(28);
+
+	note("constract e1 in global diag, share with local diag");
+	diag_set(ClientError, ER_PROC_LUA, "runtime error");
+	struct diag local_diag;
+	diag_create(&local_diag);
+	/* Copy a last error to the local diagnostics area. */
+	diag_add_error(&local_diag, diag_last_error(diag_get()));
+
+	struct error *e1 = diag_last_error(&local_diag);
+	is(e1, diag_last_error(diag_get()),
+	   "e1 is an error shared between local and global diag");
+	is(e1->refs, 2, "e1::refs: global+local diag");
+
+	note("append e2 to global diag, usr error_ref(e2)");
+	diag_add(ClientError, ER_LOAD_FUNCTION, "test", "internal error");
+	struct error *e2 = diag_last_error(diag_get());
+	error_ref(e2);
+
+	is(e2->reason, e1, "e2::reason == e1");
+	is(e1->reason, NULL, "e1::reason == NULL");
+	is(e1->refs, 2, "e1::refs: e2 + global diag");
+	is(e2->refs, 2, "e2::refs: usr + global diag");
+
+	note("diag_clean global diag");
+	diag_clear(diag_get());
+	is(e1->refs, 2, "e1::refs: e2 + local");
+	is(e2->refs, 1, "e2::refs: usr");
+	note("error_unref(e2) -> e2 destruction");
+	error_unref(e2);
+	e2 = NULL;
+	is(e1->refs, 1, "e1::refs: local diag");
+
+	/* Test rollback to SVP. */
+	note("diag_move(from = local, to = global): move e1 to global");
+	diag_move(&local_diag, diag_get());
+	is(diag_is_empty(&local_diag), true, "local diag is empty");
+	is(diag_is_empty(diag_get()), false, "global diag is not empty");
+	is(diag_last_error(diag_get()), e1, "global diag::last == e1");
+
+	note("svp = diag_svp(global), i.e. 'diag_last(global) = e1' state");
+	struct error *svp = diag_svp(diag_get());
+	fail_if(svp != e1);
+	fail_if(diag_last_error(diag_get()) != e1);
+	fail_if(e1->reason != NULL);
+	note("append e3, e4 to global diag");
+	note("usr error_ref(e1), error_ref(e3), error_ref(e4)");
+	diag_add(ClientError, ER_LOAD_FUNCTION, "test", "internal error");
+	struct error *e3 = diag_last_error(diag_get());
+	error_ref(e3);
+	diag_add(ClientError, ER_FUNC_INDEX_FUNC, "func_idx", "space",
+		 "everything is bad");
+	struct error *e4 = diag_last_error(diag_get());
+	error_ref(e4);
+	is(e1->refs, 1, "e1::refs: e3");
+	is(e3->refs, 2, "e3::refs: usr + e4");
+	is(e4->refs, 2, "e4::refs: usr + global diag");
+	is(e4->reason, e3, "e4::reason == e3");
+	is(e3->reason, e1, "e3::reason == e1");
+	note("diag_rollback_to_svp(global, svp)");
+	/*
+	 * Before rollback there is a sequence
+	 * DIAG[e4]->e3->e1->NULL;
+	 * After rollback there would be DIAG[e1]->NULL and
+	 * a sequence e4->e3->e1->NULL.
+	 */
+	diag_rollback_to_svp(diag_get(), svp);
+	is(e1->refs, 2, "e1::refs: e3 + global diag %d/%d", e1->refs, 2);
+	is(e3->refs, 2, "e3::refs: usr + e4");
+	is(e4->refs, 1, "e4::refs: usr");
+	is(diag_last_error(diag_get()), e1, "diag_last(global) = e1");
+	/* Rollback doesn't change error objects itself. */
+	is(e4->reason, e3, "e4::reason == e3");
+	is(e3->reason, e1, "e3::reason == e1");
+	error_unref(e4);
+	e4 = NULL;
+	is(e3->refs, 1, "e3::refs: usr");
+	error_unref(e3);
+	e3 = NULL;
+
+	note("ensure that sequential rollback is no-op");
+	diag_rollback_to_svp(diag_get(), svp);
+	is(e1->refs, 1, "e1::refs: global diag");
+
+	diag_clear(diag_get());
+	/*
+	 *           usr ref    SVP
+	 *   DEL!       |        |
+	 *  DIAG[#5] -> #4 -> DIAG'[#3] -> #2 -> #1
+	 *
+	 * 1) diag_rollback_to_svp
+	 * del   <-----------<------>
+	 */
+	note("test partial list destruction on rollback");
+	diag_add(ClientError, ER_PROC_LUA, "#1");
+	struct error *er1 = diag_last_error(diag_get());
+	diag_add(ClientError, ER_PROC_LUA, "#2");
+	svp = diag_svp(diag_get());
+	diag_add(ClientError, ER_PROC_LUA, "#3");
+	struct error *er3 = diag_last_error(diag_get());
+	diag_add(ClientError, ER_PROC_LUA, "#4");
+	struct error *er4 = diag_last_error(diag_get());
+	error_ref(er4);
+	diag_add(ClientError, ER_PROC_LUA, "#5");
+	is(er4->refs, 2, "er4:refs: usr + er5 %d/%d", er4->refs, 2);
+
+	diag_rollback_to_svp(diag_get(), svp);
+	note("rollback to svp(er2) -> e5:refs == 0, destruction");
+	is(er4->reason, er3, "er4->reason == er3");
+	is(er3->refs, 1, "er3:refs: er4");
+	is(er3->reason, svp, "er3->reason == svp");
+	is(svp->refs, 2, "svp->refs: global diag + er3");
+	is(svp->reason, er1, "svp->reason == er1");
+	is(er1->refs, 1, "er1->refs: err2");
+
+	/*
+	 * usr ref       SVP
+	 *  |             |
+	 * #4 -> #3 -> DIAG'[#2] -> #1
+	 *                 |
+	 * DIAG[#7] -> #6 -/
+	 *   |
+	 * usr ref
+	 */
+	note("multiple error sequences after rollback");
+	diag_add(ClientError, ER_PROC_LUA, "#6");
+	diag_add(ClientError, ER_PROC_LUA, "#7");
+	struct error *er7 = diag_last_error(diag_get());
+	error_ref(er7);
+	is(er4->refs, 1, "er4->refs: usr");
+	is(er7->refs, 2, "er7->refs: global diag + usr");
+	is(svp->refs, 2, "svp->refs: er3 + er6");
+	is(svp->reason->refs, 1, "svp->reason->refs: svp");
+	diag_rollback_to_svp(diag_get(), svp);
+	is(er4->refs, 1, "er4->refs: usr");
+	is(er7->refs, 1, "er7->refs: usr");
+	is(svp->refs, 3, "svp->refs: global diag + er3 + er6");
+	is(svp->reason->refs, 1, "svp->reason->refs: svp");
+	diag_clear(diag_get());
+	is(svp->refs, 2, "svp->refs: er3 + er6");
+	is(svp->reason->refs, 1, "svp->reason->refs: svp");
+	error_unref(er4);
+	is(svp->refs, 1, "svp->refs: er6");
+	is(svp->reason->refs, 1, "svp->reason->refs: svp");
+	error_unref(er7);
+
+	footer();
+}
+
 static int
 main_f(va_list ap)
 {
 	fiber_name_test();
 	fiber_join_test();
 	fiber_stack_test();
+	diag_test();
 	ev_break(loop(), EVBREAK_ALL);
 	return 0;
 }

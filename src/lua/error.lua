@@ -23,6 +23,8 @@ struct error {
     char _file[DIAG_FILENAME_MAX];
     /* Error description. */
     char _errmsg[DIAG_ERRMSG_MAX];
+    /* A pointer to the reason error. */
+    struct error *_reason;
 };
 
 char *
