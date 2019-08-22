@@ -627,18 +627,15 @@ cbus_loop(struct cbus_endpoint *endpoint)
 }
 
 static void
-cbus_stop_loop_f(struct cmsg *msg)
+cbus_stop_loop_f()
 {
 	fiber_cancel(fiber());
-	free(msg);
 }
 
 void
 cbus_stop_loop(struct cpipe *pipe)
 {
-	struct cmsg *cancel = malloc(sizeof(struct cmsg));
-
-	cpipe_push(pipe, cbus_stop_loop_f, cancel);
+	cpipe_push(pipe, cbus_stop_loop_f);
 	ev_invoke(pipe->producer, &pipe->flush_input, EV_CUSTOM);
 }
 
