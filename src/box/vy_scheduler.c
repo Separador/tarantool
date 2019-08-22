@@ -337,7 +337,7 @@ vy_worker_pool_start(struct vy_worker_pool *pool)
 			panic("failed to start vinyl worker thread");
 
 		worker->pool = pool;
-		cpipe_create(&worker->worker_pipe, name);
+		cpipe_create(&worker->worker_pipe, name, &cord()->slabc);
 		stailq_add_tail_entry(&pool->idle_workers, worker, in_idle);
 	}
 }
@@ -2064,7 +2064,7 @@ vy_worker_f(va_list ap)
 	struct vy_worker *worker = va_arg(ap, struct vy_worker *);
 	struct cbus_endpoint endpoint;
 
-	cpipe_create(&worker->tx_pipe, "tx");
+	cpipe_create(&worker->tx_pipe, "tx", &cord()->slabc);
 	cbus_endpoint_create(&endpoint, cord_name(&worker->cord),
 			     fiber_schedule_cb, fiber());
 	cbus_loop(&endpoint);

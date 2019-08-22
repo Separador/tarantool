@@ -232,13 +232,13 @@ macro(enable_tnt_compile_flags)
 
     # Set standard
     if (HAVE_STD_C11)
-        add_compile_flags("C" "-std=c11")
+        add_compile_flags("C" "-std=gnu11")
     else()
         add_compile_flags("C" "-std=gnu99")
     endif()
 
     if (HAVE_STD_CXX11)
-        add_compile_flags("CXX" "-std=c++11")
+        add_compile_flags("CXX" "-std=gnu++11")
     else()
         add_compile_flags("CXX" "-std=gnu++0x")
         add_definitions("-Doverride=")

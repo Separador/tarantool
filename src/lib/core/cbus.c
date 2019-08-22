@@ -88,10 +88,15 @@ cpipe_flush_cb(ev_loop * /* loop */, struct ev_async *watcher,
 	       int /* events */);
 
 void
-cpipe_create(struct cpipe *pipe, const char *consumer)
+cpipe_create(struct cpipe *pipe, const char *consumer, struct slab_cache *slabc)
 {
-	stailq_create(&pipe->input);
+	stailq_create(&pipe->pending);
+	stailq_create(&pipe->cache);
+	pipe->slabc = slabc;
+	pipe->input = (struct msg_buf *)malloc(sizeof(struct msg_buf));
+	ibuf_create(&pipe->input->data, slabc, 65500);
 
+	pipe->done = false;
 	pipe->n_input = 0;
 	pipe->max_input = INT_MAX;
 	pipe->producer = cord()->loop;
@@ -118,15 +123,26 @@ struct cmsg_poison {
 };
 
 static void
-cbus_endpoint_poison_f(struct cmsg *msg)
+cbus_endpoint_poison_f(struct cpipe *pipe)
 {
-	struct cbus_endpoint *endpoint = ((struct cmsg_poison *)msg)->endpoint;
+	struct cbus_endpoint *endpoint = pipe->endpoint;
 	tt_pthread_mutex_lock(&cbus.mutex);
 	assert(endpoint->n_pipes > 0);
 	--endpoint->n_pipes;
+	pipe->done = true;
+	tt_pthread_cond_broadcast(&cbus.cond);
 	tt_pthread_mutex_unlock(&cbus.mutex);
 	fiber_cond_signal(&endpoint->cond);
-	free(msg);
+}
+
+static void
+cpipe_flush_msg_buf(struct cpipe *pipe,
+		    struct msg_buf *msg_buf)
+{
+	struct cbus_endpoint *endpoint = pipe->endpoint;
+	tt_pthread_mutex_lock(&endpoint->mutex);
+	stailq_add_tail(&pipe->cache, &msg_buf->entry);
+	tt_pthread_mutex_unlock(&endpoint->mutex);
 }
 
 void
@@ -134,23 +150,24 @@ cpipe_destroy(struct cpipe *pipe)
 {
 	ev_async_stop(pipe->producer, &pipe->flush_input);
 
-	trigger_destroy(&pipe->on_flush);
+	if (pipe->n_input > 0) {
+		trigger_run(&pipe->on_flush, pipe);
+		make_call(CALL_ALLOC(pipe), cpipe_flush_msg_buf, pipe, pipe->input);
+	}
+	/* Add the pipe shutdown message as the last one. */
+	make_call(CALL_ALLOC(pipe), cbus_endpoint_poison_f, pipe);
 
-	struct cbus_endpoint *endpoint = pipe->endpoint;
-	struct cmsg_poison *poison = malloc(sizeof(struct cmsg_poison));
-	poison->msg.f = cbus_endpoint_poison_f;
-	poison->endpoint = pipe->endpoint;
 	/*
 	 * Avoid the general purpose cpipe_push_input() since
 	 * we want to control the way the poison message is
 	 * delivered.
 	 */
+	struct cbus_endpoint *endpoint = pipe->endpoint;
+
 	tt_pthread_mutex_lock(&endpoint->mutex);
 	/* Flush input */
-	stailq_concat(&endpoint->output, &pipe->input);
+	stailq_add_tail(&endpoint->output, &pipe->input->entry);
 	pipe->n_input = 0;
-	/* Add the pipe shutdown message as the last one. */
-	stailq_add_tail_entry(&endpoint->output, poison, msg.fifo);
 	/* Count statistics */
 	rmean_collect(cbus.stats, CBUS_STAT_EVENTS, 1);
 	/*
@@ -162,6 +179,12 @@ cpipe_destroy(struct cpipe *pipe)
 	ev_async_send(endpoint->consumer, &endpoint->async);
 	tt_pthread_mutex_unlock(&endpoint->mutex);
 
+	/* Wait until all pipe messages were processed. */
+	tt_pthread_mutex_lock(&cbus.mutex);
+	while (!pipe->done)
+		tt_pthread_cond_wait(&cbus.cond, &cbus.mutex);
+	tt_pthread_mutex_unlock(&cbus.mutex);
+	//TODO: free cache
 	TRASH(pipe);
 }
 
@@ -222,6 +245,7 @@ cbus_endpoint_create(struct cbus_endpoint *endpoint, const char *name,
 	ev_async_start(endpoint->consumer, &endpoint->async);
 
 	rlist_add_tail(&cbus.endpoints, &endpoint->in_cbus);
+	endpoint->slabc = &cord()->slabc;
 	tt_pthread_mutex_unlock(&cbus.mutex);
 	/*
 	 * Alert all waiting producers.
@@ -278,14 +302,24 @@ cpipe_flush_cb(ev_loop *loop, struct ev_async *watcher, int events)
 		return;
 
 	trigger_run(&pipe->on_flush, pipe);
+	make_call(CALL_ALLOC(pipe), cpipe_flush_msg_buf, pipe, pipe->input);
 	/* Trigger task processing when the queue becomes non-empty. */
 	bool output_was_empty;
 
 	tt_pthread_mutex_lock(&endpoint->mutex);
 	output_was_empty = stailq_empty(&endpoint->output);
 	/** Flush input */
-	stailq_concat(&endpoint->output, &pipe->input);
+	stailq_add_tail(&endpoint->output, &pipe->input->entry);
+	if (!stailq_empty(&pipe->cache))
+		pipe->input = stailq_shift_entry(&pipe->cache, struct msg_buf, entry);
+	else
+		pipe->input = NULL;
 	tt_pthread_mutex_unlock(&endpoint->mutex);
+
+	if (pipe->input == NULL) {
+		pipe->input = (struct msg_buf *)malloc(sizeof(struct msg_buf));
+		ibuf_create(&pipe->input->data, pipe->slabc, 65500);
+	}
 
 	pipe->n_input = 0;
 	if (output_was_empty) {
@@ -358,7 +392,7 @@ cbus_call(struct cpipe *callee, struct cpipe *caller, struct cbus_call_msg *msg,
 	msg->free_cb = free_cb;
 	msg->rc = 0;
 
-	cpipe_push(callee, cbus_call_perform, cmsg(msg));
+	cpipe_push(callee, cbus_call_perform, &msg->msg);
 
 	fiber_yield_timeout(timeout);
 	if (msg->complete == false) {           /* timed out or cancelled */
@@ -424,6 +458,7 @@ struct cbus_pair_msg {
 	void *pair_arg;
 	const char *src_name;
 	struct cpipe *src_pipe;
+	struct slab_cache *slabc;
 	bool complete;
 	struct fiber_cond cond;
 };
@@ -436,7 +471,7 @@ cbus_pair_perform(struct cmsg *cmsg)
 {
 	struct cbus_pair_msg *msg = container_of(cmsg,
 			struct cbus_pair_msg, cmsg);
-	cpipe_create(msg->src_pipe, msg->src_name);
+	cpipe_create(msg->src_pipe, msg->src_name, msg->slabc);
 	if (msg->pair_cb != NULL)
 		msg->pair_cb(msg->pair_arg);
 	cpipe_push(msg->src_pipe, cbus_pair_complete, cmsg);
@@ -469,7 +504,8 @@ cbus_pair(const char *dest_name, const char *src_name,
 	struct cbus_endpoint *endpoint = cbus_find_endpoint(&cbus, src_name);
 	assert(endpoint != NULL);
 
-	cpipe_create(dest_pipe, dest_name);
+	cpipe_create(dest_pipe, dest_name, endpoint->slabc);
+	msg.slabc = dest_pipe->endpoint->slabc;
 	cpipe_push(dest_pipe, cbus_pair_perform, &msg.cmsg);
 
 	while (true) {
@@ -570,9 +606,13 @@ cbus_process(struct cbus_endpoint *endpoint)
 	struct stailq output;
 	stailq_create(&output);
 	cbus_endpoint_fetch(endpoint, &output);
-	struct cmsg *msg, *msg_next;
-	stailq_foreach_entry_safe(msg, msg_next, &output, fifo)
-		cmsg_deliver(msg);
+	while (!stailq_empty(&output)) {
+		struct msg_buf *msg_buf;
+		msg_buf = stailq_shift_entry(&output, struct msg_buf, entry);
+		struct ibuf *data = &msg_buf->data;
+		void *last = data->wpos;
+		while (exec_call((void **)&data->rpos) < last);
+	}
 }
 
 void

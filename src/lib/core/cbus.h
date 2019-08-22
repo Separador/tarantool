@@ -35,6 +35,11 @@
 #include "rmean.h"
 #include "small/rlist.h"
 #include "salad/stailq.h"
+#include "small/ibuf.h"
+
+#define asm __asm__
+
+#include "cbind.h"
 
 #if defined(__cplusplus)
 extern "C" {
@@ -56,31 +61,21 @@ extern const char *cbus_stat_strings[CBUS_STAT_LAST];
 
 /** A message traveling between cords. */
 struct cmsg {
-	/**
-	 * A member of the linked list - fifo of the pipe the
-	 * message is stuck in currently, waiting to get
-	 * delivered.
-	 */
-	struct stailq_entry fifo;
-	/** The message delivery function. */
-	cmsg_f f;
+	void *call;
 };
 
-static inline struct cmsg *cmsg(void *ptr) { return (struct cmsg *) ptr; }
-
-/**
- * Deliver the message and dispatch it to the next hop.
- */
-static inline void
-cmsg_deliver(struct cmsg *msg)
-{
-	msg->f(msg);
-}
+struct msg_buf {
+	struct stailq_entry entry;
+	struct ibuf data;
+};
 
 /** A  uni-directional FIFO queue from one cord to another. */
 struct cpipe {
 	/** Staging area for pushed messages */
-	struct stailq input;
+	struct slab_cache *slabc;
+	struct stailq cache;
+	struct stailq pending;
+	struct msg_buf *input;
 	/** Counters are useful for finer-grained scheduling. */
 	int n_input;
 	/**
@@ -103,10 +98,12 @@ struct cpipe {
 	 * flushed messages.
 	 */
 	struct cbus_endpoint *endpoint;
+	bool done;
 	/**
 	 * Triggers to call on flush event, if the input queue
 	 * is not empty.
 	 */
+
 	struct rlist on_flush;
 };
 
@@ -117,7 +114,7 @@ struct cpipe {
  * has joined the bus.
  */
 void
-cpipe_create(struct cpipe *pipe, const char *consumer);
+cpipe_create(struct cpipe *pipe, const char *consumer, struct slab_cache *slabc);
 
 /**
  * Deinitialize a pipe and disconnect it from the consumer.
@@ -174,21 +171,29 @@ cpipe_flush_input(struct cpipe *pipe)
 	}
 }
 
+static inline void *
+pipe_alloc(struct cpipe *pipe, void *data, size_t size)
+{
+	void *res = ibuf_alloc(&pipe->input->data, size);
+	memcpy(res, data, size);
+	return res;
+}
+
+#define CALL_ALLOC_CLOSE(ARGS...) ARGS )
+#define CALL_ALLOC(PIPE) pipe_alloc EMPTY() (PIPE, CALL_ALLOC_CLOSE
+
 /**
  * Push a single message to the pipe input. The message is pushed
  * to a staging area. To be delivered, the input needs to be
  * flushed with cpipe_flush_input().
  */
-static inline void
-cpipe_push_input(struct cpipe *pipe, cmsg_f f, struct cmsg *msg)
-{
-	assert(loop() == pipe->producer);
-
-	msg->f = f;
-	stailq_add_tail_entry(&pipe->input, msg, fifo);
-	pipe->n_input++;
-	if (pipe->n_input >= pipe->max_input)
-		ev_invoke(pipe->producer, &pipe->flush_input, EV_CUSTOM);
+#define cpipe_push_input(pipe, FUNC, ARGS...)					\
+{										\
+	assert(loop() == (pipe)->producer);					\
+	make_call(CALL_ALLOC(pipe), FUNC, ARGS);				\
+	(pipe)->n_input++;							\
+	if ((pipe)->n_input >= (pipe)->max_input)				\
+		ev_invoke((pipe)->producer, &(pipe)->flush_input, EV_CUSTOM);	\
 }
 
 /**
@@ -197,13 +202,12 @@ cpipe_push_input(struct cpipe *pipe, cmsg_f f, struct cmsg *msg)
  * it's not known at all whether there'll be other
  * messages coming up.
  */
-static inline void
-cpipe_push(struct cpipe *pipe, cmsg_f f, struct cmsg *msg)
-{
-	cpipe_push_input(pipe, f, msg);
-	assert(pipe->n_input < pipe->max_input);
-	if (pipe->n_input == 1)
-		ev_feed_event(pipe->producer, &pipe->flush_input, EV_CUSTOM);
+#define cpipe_push(pipe, FUNC, ARGS...)						\
+{										\
+	cpipe_push_input(pipe, FUNC, ARGS);					\
+	if ((pipe)->n_input == 1)						\
+		ev_feed_event((pipe)->producer, &(pipe)->flush_input,		\
+			      EV_CUSTOM);					\
 }
 
 void
@@ -232,6 +236,8 @@ struct cbus_endpoint {
 	uint32_t n_pipes;
 	/** Condition for endpoint destroy */
 	struct fiber_cond cond;
+
+	struct slab_cache *slabc;
 };
 
 /**

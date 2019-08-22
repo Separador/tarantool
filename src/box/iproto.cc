@@ -1881,7 +1881,7 @@ net_cord_f(va_list /* ap */)
 	/* Create "net" endpoint. */
 	cbus_endpoint_create(&endpoint, "net", fiber_schedule_cb, fiber());
 	/* Create a pipe to "tx" thread. */
-	cpipe_create(&tx_pipe, "tx");
+	cpipe_create(&tx_pipe, "tx", &cord()->slabc);
 	cpipe_set_max_input(&tx_pipe, iproto_msg_max / 2);
 	/* Process incomming messages. */
 	cbus_loop(&endpoint);
@@ -1999,7 +1999,7 @@ iproto_init()
 		panic("failed to initialize iproto thread");
 
 	/* Create a pipe to "net" thread. */
-	cpipe_create(&net_pipe, "net");
+	cpipe_create(&net_pipe, "net", &cord()->slabc);
 	cpipe_set_max_input(&net_pipe, iproto_msg_max / 2);
 	struct session_vtab iproto_session_vtab = {
 		/* .push = */ iproto_session_push,

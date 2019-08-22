@@ -114,7 +114,7 @@ vy_run_reader_f(va_list ap)
 	struct vy_run_reader *reader = va_arg(ap, struct vy_run_reader *);
 	struct cbus_endpoint endpoint;
 
-	cpipe_create(&reader->tx_pipe, "tx_prio");
+	cpipe_create(&reader->tx_pipe, "tx_prio", &cord()->slabc);
 	cbus_endpoint_create(&endpoint, cord_name(cord()),
 			     fiber_schedule_cb, fiber());
 	cbus_loop(&endpoint);
@@ -143,7 +143,7 @@ vy_run_env_start_readers(struct vy_run_env *env)
 		if (cord_costart(&reader->cord, name,
 				 vy_run_reader_f, reader) != 0)
 			panic("failed to start vinyl reader thread");
-		cpipe_create(&reader->reader_pipe, name);
+		cpipe_create(&reader->reader_pipe, name, &cord()->slabc);
 	}
 	env->next_reader = 0;
 }

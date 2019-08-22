@@ -3214,7 +3214,7 @@ vy_join_f(va_list ap)
 
 	coio_enable();
 
-	cpipe_create(&ctx->tx_pipe, "tx");
+	cpipe_create(&ctx->tx_pipe, "tx", &cord()->slabc);
 
 	struct cbus_endpoint endpoint;
 	cbus_endpoint_create(&endpoint, cord_name(cord()),
@@ -3251,7 +3251,7 @@ vinyl_engine_join(struct engine *engine, const struct vclock *vclock,
 	struct cord cord;
 	if (cord_costart(&cord, name, vy_join_f, ctx) != 0)
 		goto out_free_ctx;
-	cpipe_create(&ctx->relay_pipe, name);
+	cpipe_create(&ctx->relay_pipe, name, &cord()->slabc);
 
 	/*
 	 * Load the recovery context from the given point in time.
@@ -3849,7 +3849,7 @@ vinyl_iterator_primary_next(struct iterator *base, struct tuple **ret)
 {
 	double start_time = ev_monotonic_now(loop());
 
-	assert(base->next = vinyl_iterator_primary_next);
+	assert(base->next == vinyl_iterator_primary_next);
 	struct vinyl_iterator *it = (struct vinyl_iterator *)base;
 	assert(it->lsm->index_id == 0);
 
@@ -3878,7 +3878,7 @@ vinyl_iterator_secondary_next(struct iterator *base, struct tuple **ret)
 {
 	double start_time = ev_monotonic_now(loop());
 
-	assert(base->next = vinyl_iterator_secondary_next);
+	assert(base->next == vinyl_iterator_secondary_next);
 	struct vinyl_iterator *it = (struct vinyl_iterator *)base;
 	assert(it->lsm->index_id > 0);
 	struct vy_entry partial, entry;

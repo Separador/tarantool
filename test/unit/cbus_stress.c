@@ -128,7 +128,7 @@ thread_create(struct thread *t, int id)
 	if (cord_costart(&t->cord, t->name, thread_func, t) != 0)
 		unreachable();
 
-	cpipe_create(&t->thread_pipe, t->name);
+	cpipe_create(&t->thread_pipe, t->name, &cord()->slabc);
 }
 
 static int
@@ -300,7 +300,7 @@ thread_func(va_list ap)
 {
 	struct thread *t = va_arg(ap, struct thread *);
 
-	cpipe_create(&t->main_pipe, "main");
+	cpipe_create(&t->main_pipe, "main", &cord()->slabc);
 
 	struct cbus_endpoint endpoint;
 	cbus_endpoint_create(&endpoint, t->name,

@@ -41,15 +41,24 @@ fiber_pool_f(va_list ap)
 	struct fiber *f = fiber();
 	struct ev_loop *loop = pool->consumer;
 	struct stailq *output = &pool->output;
-	struct cmsg *msg;
+	bool has_msg;
 	ev_tstamp last_active_at = ev_monotonic_now(loop);
 	pool->size++;
 restart:
-	msg = NULL;
-	while (!stailq_empty(output) && !fiber_is_cancelled(fiber())) {
-		 msg = stailq_shift_entry(output, struct cmsg, fifo);
-
-		if (f->caller == &cord->sched && ! stailq_empty(output) &&
+	has_msg = false;
+	struct msg_buf *msg_buf = pool->msg_buf;
+	while (((msg_buf != NULL && ibuf_used(&msg_buf->data) > 0) ||
+	        !stailq_empty(output))
+	       && !fiber_is_cancelled(fiber())) {
+		if (msg_buf == NULL || ibuf_used(&msg_buf->data) == 0) {
+			pool->msg_buf = stailq_shift_entry(output,
+							   struct msg_buf,
+							   entry);
+			msg_buf = pool->msg_buf;
+			continue;
+		}
+		struct ibuf *data = &msg_buf->data;
+		if (f->caller == &cord->sched &&
 		    ! rlist_empty(&pool->idle)) {
 			/*
 			 * Activate a "backup" fiber for the next
@@ -61,12 +70,18 @@ restart:
 			f->caller->flags |= FIBER_IS_READY;
 			assert(f->caller->caller == &cord->sched);
 		}
-		cmsg_deliver(msg);
+		void *last = data->wpos;
+		void *ex = exec_call((void **)&data->rpos);
+		if (last == ex) {
+			pool->msg_buf = NULL;
+		}
+		msg_buf = pool->msg_buf;
+		has_msg = true;
 	}
 	/** Put the current fiber into a fiber cache. */
-	if (!fiber_is_cancelled(fiber()) && (msg != NULL ||
+	if (!fiber_is_cancelled(fiber()) && (has_msg ||
 	    ev_monotonic_now(loop) - last_active_at < pool->idle_timeout)) {
-		if (msg != NULL)
+		if (has_msg)
 			last_active_at = ev_monotonic_now(loop);
 		/*
 		 * Add the fiber to the front of the list, so that
@@ -111,7 +126,8 @@ fiber_pool_cb(ev_loop *loop, struct ev_watcher *watcher, int events)
 	cbus_endpoint_fetch(&pool->endpoint, &pool->output);
 
 	struct stailq *output = &pool->output;
-	while (! stailq_empty(output)) {
+	while (!stailq_empty(output) ||
+	       (pool->msg_buf != NULL && ibuf_used(&pool->msg_buf->data) > 0)) {
 		struct fiber *f;
 		if (! rlist_empty(&pool->idle)) {
 			f = rlist_shift_entry(&pool->idle, struct fiber, state);
@@ -156,6 +172,7 @@ fiber_pool_create(struct fiber_pool *pool, const char *name, int max_pool_size,
 	pool->size = 0;
 	pool->max_size = max_pool_size;
 	stailq_create(&pool->output);
+	pool->msg_buf = NULL;
 	fiber_cond_create(&pool->worker_cond);
 	/* Join fiber pool to cbus */
 	cbus_endpoint_create(&pool->endpoint, name, fiber_pool_cb, pool);

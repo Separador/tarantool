@@ -63,6 +63,8 @@ struct fiber_pool {
 		float idle_timeout;
 		/** Staged messages (for fibers to work on) */
 		struct stailq output;
+		/** Current message buffer. */
+		struct msg_buf *msg_buf;
 		/** Timer for idle workers */
 		struct ev_timer idle_timer;
 		/** Condition for worker exit signaling */

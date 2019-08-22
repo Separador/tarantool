@@ -71,7 +71,7 @@ static int
 worker_f(va_list ap)
 {
 	(void) ap;
-	cpipe_create(&pipe_to_main, "main");
+	cpipe_create(&pipe_to_main, "main", &cord()->slabc);
 	struct cbus_endpoint endpoint;
 	cbus_endpoint_create(&endpoint, "worker", fiber_schedule_cb, fiber());
 	cbus_loop(&endpoint);
@@ -85,7 +85,7 @@ worker_start()
 {
 	printf("start worker\n");
 	fail_if(cord_costart(&worker, "worker", worker_f, NULL) != 0);
-	cpipe_create(&pipe_to_worker, "worker");
+	cpipe_create(&pipe_to_worker, "worker", &cord()->slabc);
 }
 
 static void

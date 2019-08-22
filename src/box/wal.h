@@ -93,6 +93,7 @@ struct wal_watcher_msg {
 	struct cmsg cmsg;
 	struct wal_watcher *watcher;
 	unsigned events;
+	bool in_progress;
 };
 
 enum wal_event {
