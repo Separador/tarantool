@@ -132,10 +132,14 @@ whereClauseInsert(WhereClause * pWC, Expr * p, u16 wtFlags)
 static int
 allowedOp(int op)
 {
-	assert(TK_GT > TK_EQ && TK_GT < TK_GE);
-	assert(TK_LT > TK_EQ && TK_LT < TK_GE);
-	assert(TK_LE > TK_EQ && TK_LE < TK_GE);
-	assert(TK_GE == TK_EQ + 4);
+	static_assert(TK_GT > TK_EQ && TK_GT < TK_GE,
+		"inconsistent token definition");
+	static_assert(TK_LT > TK_EQ && TK_LT < TK_GE,
+		"inconsistent token definition");
+	static_assert(TK_LE > TK_EQ && TK_LE < TK_GE,
+		"inconsistent token definition");
+	static_assert(TK_GE == TK_EQ + 4,
+		"inconsistent token definition");
 	return op == TK_IN || (op >= TK_EQ && op <= TK_GE) || op == TK_ISNULL;
 }
 
@@ -186,10 +190,14 @@ exprCommute(Parse * pParse, Expr * pExpr)
 	}
 	SWAP(pExpr->pRight, pExpr->pLeft);
 	if (pExpr->op >= TK_GT) {
-		assert(TK_LT == TK_GT + 2);
-		assert(TK_GE == TK_LE + 2);
-		assert(TK_GT > TK_EQ);
-		assert(TK_GT < TK_LE);
+		static_assert(TK_LT == TK_GT + 2,
+			"inconsistent token definition");
+		static_assert(TK_GE == TK_LE + 2,
+			"inconsistent token definition");
+		static_assert(TK_GT > TK_EQ,
+			"inconsistent token definition");
+		static_assert(TK_GT < TK_LE,
+			"inconsistent token definition");
 		assert(pExpr->op >= TK_GT && pExpr->op <= TK_GE);
 		pExpr->op = ((pExpr->op - TK_GT) ^ 2) + TK_GT;
 	}
@@ -945,8 +953,9 @@ exprMightBeIndexed(int op,	/* The specific comparison operator */
 	 * inequality constraint (>, <, >= or <=), perform the processing
 	 * on the first element of the vector.
 	 */
-	assert(TK_GT + 1 == TK_LE && TK_GT + 2 == TK_LT && TK_GT + 3 == TK_GE);
-	assert(TK_IN < TK_GE);
+	static_assert(TK_GT + 1 == TK_LE && TK_GT + 2 == TK_LT && TK_GT + 3 == TK_GE,
+		"inconsistent token definition");
+	static_assert(TK_IN < TK_GE, "inconsistent token definition");
 	assert(op <= TK_GE || op == TK_ISNULL || op == TK_NOTNULL);
 	if (pExpr->op == TK_VECTOR && (op >= TK_GT && op <= TK_GE)) {
 		pExpr = pExpr->x.pList->a[0].pExpr;

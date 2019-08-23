@@ -1847,7 +1847,8 @@ case OP_ShiftRight: {           /* same as TK_RSHIFT, in1, in2, out3 */
 
 		/* If shifting by a negative amount, shift in the other direction */
 		if (iB<0) {
-			assert(OP_ShiftRight==OP_ShiftLeft+1);
+			static_assert(OP_ShiftRight==OP_ShiftLeft+1,
+				"inconsistent opcode definition");
 			op = 2*OP_ShiftLeft + 1 - op;
 			iB = iB>(-64) ? -iB : 64;
 		}
@@ -3280,9 +3281,12 @@ case OP_SeekGT: {       /* jump, in3 */
 	pC = p->apCsr[pOp->p1];
 	assert(pC!=0);
 	assert(pC->eCurType==CURTYPE_TARANTOOL);
-	assert(OP_SeekLE == OP_SeekLT+1);
-	assert(OP_SeekGE == OP_SeekLT+2);
-	assert(OP_SeekGT == OP_SeekLT+3);
+	static_assert(OP_SeekLE == OP_SeekLT+1,
+		"inconsistent opcode definition");
+	static_assert(OP_SeekGE == OP_SeekLT+2,
+		"inconsistent opcode definition");
+	static_assert(OP_SeekGT == OP_SeekLT+3,
+		"inconsistent opcode definition");
 	assert(pC->uc.pCursor!=0);
 	oc = pOp->opcode;
 	eqOnly = 0;
@@ -3352,9 +3356,12 @@ case OP_SeekGT: {       /* jump, in3 */
 			 *        (x <= 4.9)    ->     (x <  5)
 			 */
 			if (pIn3->u.r<(double)iKey) {
-				assert(OP_SeekGE==(OP_SeekGT-1));
-				assert(OP_SeekLT==(OP_SeekLE-1));
-				assert((OP_SeekLE & 0x0001)==(OP_SeekGT & 0x0001));
+				static_assert(OP_SeekGE==(OP_SeekGT-1),
+					"inconsistent opcode definition");
+				static_assert(OP_SeekLT==(OP_SeekLE-1),
+					"inconsistent opcode definition");
+				static_assert((OP_SeekLE & 0x0001)==(OP_SeekGT & 0x0001),
+					"inconsistent opcode definition");
 				if ((oc & 0x0001)==(OP_SeekGT & 0x0001)) oc--;
 			}
 
@@ -3362,9 +3369,12 @@ case OP_SeekGT: {       /* jump, in3 */
 			 * term, substitute <= for < and > for >=.
 			 */
 			else if (pIn3->u.r>(double)iKey) {
-				assert(OP_SeekLE==(OP_SeekLT+1));
-				assert(OP_SeekGT==(OP_SeekGE+1));
-				assert((OP_SeekLT & 0x0001)==(OP_SeekGE & 0x0001));
+				static_assert(OP_SeekLE==(OP_SeekLT+1),
+					"inconsistent opcode definition");
+				static_assert(OP_SeekGT==(OP_SeekGE+1),
+					"inconsistent opcode definition");
+				static_assert((OP_SeekLT & 0x0001)==(OP_SeekGE & 0x0001),
+					"inconsistent opcode definition");
 				if ((oc & 0x0001)==(OP_SeekLT & 0x0001)) oc++;
 			}
 		}
@@ -4529,7 +4539,8 @@ case OP_IdxGE:  {       /* jump */
 	{ int i; for(i=0; i<r.nField; i++) assert(memIsValid(&r.aMem[i])); }
 #endif
 	int res =  tarantoolsqlIdxKeyCompare(pC->uc.pCursor, &r);
-	assert((OP_IdxLE&1)==(OP_IdxLT&1) && (OP_IdxGE&1)==(OP_IdxGT&1));
+	static_assert((OP_IdxLE&1)==(OP_IdxLT&1) && (OP_IdxGE&1)==(OP_IdxGT&1),
+			"inconsistent opcode definition");
 	if ((pOp->opcode&1)==(OP_IdxLT&1)) {
 		assert(pOp->opcode==OP_IdxLE || pOp->opcode==OP_IdxLT);
 		res = -res;
