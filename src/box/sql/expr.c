@@ -3670,6 +3670,31 @@ exprCodeVector(Parse * pParse, Expr * p, int *piFreeable)
 }
 
 /*
+ * static asserts for sqlExprCodeTarget, sqlExprIfTrue and sqlExprIfFalse
+ */
+static_assert(TK_LT == OP_Lt, "inconsistent token/opcode definition");
+static_assert(TK_LE == OP_Le, "inconsistent token/opcode definition");
+static_assert(TK_GT == OP_Gt, "inconsistent token/opcode definition");
+static_assert(TK_GE == OP_Ge, "inconsistent token/opcode definition");
+static_assert(TK_EQ == OP_Eq, "inconsistent token/opcode definition");
+static_assert(TK_NE == OP_Ne, "inconsistent token/opcode definition");
+static_assert(TK_AND == OP_And, "inconsistent token/opcode definition");
+static_assert(TK_OR == OP_Or, "inconsistent token/opcode definition");
+static_assert(TK_PLUS == OP_Add, "inconsistent token/opcode definition");
+static_assert(TK_MINUS == OP_Subtract, "inconsistent token/opcode definition");
+static_assert(TK_REM == OP_Remainder, "inconsistent token/opcode definition");
+static_assert(TK_BITAND == OP_BitAnd, "inconsistent token/opcode definition");
+static_assert(TK_BITOR == OP_BitOr, "inconsistent token/opcode definition");
+static_assert(TK_SLASH == OP_Divide, "inconsistent token/opcode definition");
+static_assert(TK_LSHIFT == OP_ShiftLeft, "inconsistent token/opcode definition");
+static_assert(TK_RSHIFT == OP_ShiftRight, "inconsistent token/opcode definition");
+static_assert(TK_CONCAT == OP_Concat, "inconsistent token/opcode definition");
+static_assert(TK_BITNOT == OP_BitNot, "inconsistent token/opcode definition");
+static_assert(TK_NOT == OP_Not, "inconsistent token/opcode definition");
+static_assert(TK_ISNULL == OP_IsNull, "inconsistent token/opcode definition");
+static_assert(TK_NOTNULL == OP_NotNull, "inconsistent token/opcode definition");
+
+/*
  * Generate code into the current Vdbe to evaluate the given
  * expression.  Attempt to store the results in register "target".
  * Return the register where results are stored.
@@ -3839,28 +3864,16 @@ sqlExprCodeTarget(Parse * pParse, Expr * pExpr, int target)
 							 &regFree2);
 				codeCompare(pParse, pLeft, pExpr->pRight, op,
 					    r1, r2, inReg, SQL_STOREP2);
-				static_assert(TK_LT == OP_Lt,
-					"inconsistent token/opcode definition");
 				testcase(op == OP_Lt);
 				VdbeCoverageIf(v, op == OP_Lt);
-				static_assert(TK_LE == OP_Le,
-					"inconsistent token/opcode definition");
 				testcase(op == OP_Le);
 				VdbeCoverageIf(v, op == OP_Le);
-				static_assert(TK_GT == OP_Gt,
-					"inconsistent token/opcode definition");
 				testcase(op == OP_Gt);
 				VdbeCoverageIf(v, op == OP_Gt);
-				static_assert(TK_GE == OP_Ge,
-					"inconsistent token/opcode definition");
 				testcase(op == OP_Ge);
 				VdbeCoverageIf(v, op == OP_Ge);
-				static_assert(TK_EQ == OP_Eq,
-					"inconsistent token/opcode definition");
 				testcase(op == OP_Eq);
 				VdbeCoverageIf(v, op == OP_Eq);
-				static_assert(TK_NE == OP_Ne,
-					"inconsistent token/opcode definition");
 				testcase(op == OP_Ne);
 				VdbeCoverageIf(v, op == OP_Ne);
 				testcase(regFree1 == 0);
@@ -3880,38 +3893,16 @@ sqlExprCodeTarget(Parse * pParse, Expr * pExpr, int target)
 	case TK_LSHIFT:
 	case TK_RSHIFT:
 	case TK_CONCAT:{
-			static_assert(TK_AND == OP_And,
-				"inconsistent token/opcode definition");
 			testcase(op == TK_AND);
-			static_assert(TK_OR == OP_Or,
-				"inconsistent token/opcode definition");
 			testcase(op == TK_OR);
-			static_assert(TK_PLUS == OP_Add,
-				"inconsistent token/opcode definition");
 			testcase(op == TK_PLUS);
-			static_assert(TK_MINUS == OP_Subtract,
-				"inconsistent token/opcode definition");
 			testcase(op == TK_MINUS);
-			static_assert(TK_REM == OP_Remainder,
-				"inconsistent token/opcode definition");
 			testcase(op == TK_REM);
-			static_assert(TK_BITAND == OP_BitAnd,
-				"inconsistent token/opcode definition");
 			testcase(op == TK_BITAND);
-			static_assert(TK_BITOR == OP_BitOr,
-				"inconsistent token/opcode definition");
 			testcase(op == TK_BITOR);
-			static_assert(TK_SLASH == OP_Divide,
-				"inconsistent token/opcode definition");
 			testcase(op == TK_SLASH);
-			static_assert(TK_LSHIFT == OP_ShiftLeft,
-				"inconsistent token/opcode definition");
 			testcase(op == TK_LSHIFT);
-			static_assert(TK_RSHIFT == OP_ShiftRight,
-				"inconsistent token/opcode definition");
 			testcase(op == TK_RSHIFT);
-			static_assert(TK_CONCAT == OP_Concat,
-				"inconsistent token/opcode definition");
 			testcase(op == TK_CONCAT);
 			r1 = sqlExprCodeTemp(pParse, pExpr->pLeft,
 						 &regFree1);
@@ -3948,11 +3939,7 @@ sqlExprCodeTarget(Parse * pParse, Expr * pExpr, int target)
 		}
 	case TK_BITNOT:
 	case TK_NOT:{
-			static_assert(TK_BITNOT == OP_BitNot,
-				"inconsistent token/opcode definition");
 			testcase(op == TK_BITNOT);
-			static_assert(TK_NOT == OP_Not,
-				"inconsistent token/opcode definition");
 			testcase(op == TK_NOT);
 			r1 = sqlExprCodeTemp(pParse, pExpr->pLeft,
 						 &regFree1);
@@ -3963,11 +3950,7 @@ sqlExprCodeTarget(Parse * pParse, Expr * pExpr, int target)
 	case TK_ISNULL:
 	case TK_NOTNULL:{
 			int addr;
-			static_assert(TK_ISNULL == OP_IsNull,
-				"inconsistent token/opcode definition");
 			testcase(op == TK_ISNULL);
-			static_assert(TK_NOTNULL == OP_NotNull,
-				"inconsistent token/opcode definition");
 			testcase(op == TK_NOTNULL);
 			sqlVdbeAddOp2(v, OP_Bool, true, target);
 			r1 = sqlExprCodeTemp(pParse, pExpr->pLeft,
@@ -4780,31 +4763,19 @@ sqlExprIfTrue(Parse * pParse, Expr * pExpr, int dest, int jumpIfNull)
 						 &regFree2);
 			codeCompare(pParse, pExpr->pLeft, pExpr->pRight, op, r1,
 				    r2, dest, jumpIfNull);
-			static_assert(TK_LT == OP_Lt,
-				"inconsistent token/opcode definition");
 			testcase(op == OP_Lt);
 			VdbeCoverageIf(v, op == OP_Lt);
-			static_assert(TK_LE == OP_Le,
-				"inconsistent token/opcode definition");
 			testcase(op == OP_Le);
 			VdbeCoverageIf(v, op == OP_Le);
-			static_assert(TK_GT == OP_Gt,
-				"inconsistent token/opcode definition");
 			testcase(op == OP_Gt);
 			VdbeCoverageIf(v, op == OP_Gt);
-			static_assert(TK_GE == OP_Ge,
-				"inconsistent token/opcode definition");
 			testcase(op == OP_Ge);
 			VdbeCoverageIf(v, op == OP_Ge);
-			static_assert(TK_EQ == OP_Eq,
-				"inconsistent token/opcode definition");
 			testcase(op == OP_Eq);
 			VdbeCoverageIf(v, op == OP_Eq
 				       && jumpIfNull == SQL_NULLEQ);
 			VdbeCoverageIf(v, op == OP_Eq
 				       && jumpIfNull != SQL_NULLEQ);
-			static_assert(TK_NE == OP_Ne,
-				"inconsistent token/opcode definition");
 			testcase(op == OP_Ne);
 			VdbeCoverageIf(v, op == OP_Ne
 				       && jumpIfNull == SQL_NULLEQ);
@@ -4816,11 +4787,7 @@ sqlExprIfTrue(Parse * pParse, Expr * pExpr, int dest, int jumpIfNull)
 		}
 	case TK_ISNULL:
 	case TK_NOTNULL:{
-			static_assert(TK_ISNULL == OP_IsNull,
-				"inconsistent token/opcode definition");
 			testcase(op == TK_ISNULL);
-			static_assert(TK_NOTNULL == OP_NotNull,
-				"inconsistent token/opcode definition");
 			testcase(op == TK_NOTNULL);
 			r1 = sqlExprCodeTemp(pParse, pExpr->pLeft,
 						 &regFree1);
@@ -4981,31 +4948,19 @@ sqlExprIfFalse(Parse * pParse, Expr * pExpr, int dest, int jumpIfNull)
 						 &regFree2);
 			codeCompare(pParse, pExpr->pLeft, pExpr->pRight, op, r1,
 				    r2, dest, jumpIfNull);
-			static_assert(TK_LT == OP_Lt,
-				"inconsistent token/opcode definition");
 			testcase(op == OP_Lt);
 			VdbeCoverageIf(v, op == OP_Lt);
-			static_assert(TK_LE == OP_Le,
-				"inconsistent token/opcode definition");
 			testcase(op == OP_Le);
 			VdbeCoverageIf(v, op == OP_Le);
-			static_assert(TK_GT == OP_Gt,
-				"inconsistent token/opcode definition");
 			testcase(op == OP_Gt);
 			VdbeCoverageIf(v, op == OP_Gt);
-			static_assert(TK_GE == OP_Ge,
-				"inconsistent token/opcode definition");
 			testcase(op == OP_Ge);
 			VdbeCoverageIf(v, op == OP_Ge);
-			static_assert(TK_EQ == OP_Eq,
-				"inconsistent token/opcode definition");
 			testcase(op == OP_Eq);
 			VdbeCoverageIf(v, op == OP_Eq
 				       && jumpIfNull != SQL_NULLEQ);
 			VdbeCoverageIf(v, op == OP_Eq
 				       && jumpIfNull == SQL_NULLEQ);
-			static_assert(TK_NE == OP_Ne,
-				"inconsistent token/opcode definition");
 			testcase(op == OP_Ne);
 			VdbeCoverageIf(v, op == OP_Ne
 				       && jumpIfNull != SQL_NULLEQ);
